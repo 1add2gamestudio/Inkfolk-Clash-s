@@ -1,0 +1,6 @@
+{
+  "name": "Chrono Swarm — Concept & Art Pitch",
+  "description": "Portrait lane-tug-of-war strategy game art direction showcase featuring six distinct visual styles with live Main Menu and Active Battle previews.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
