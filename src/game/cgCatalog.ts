@@ -1,3 +1,9 @@
+import defeatInchesShortImg from '../assets/images/defeat_inches_short_1795078407840.jpg';
+import defeatRainRetreatImg from '../assets/images/defeat_rain_retreat_1795078407722.jpg';
+import defeatSiegeEclipseImg from '../assets/images/defeat_siege_eclipse_1795078407548.jpg';
+import victoryAstralCrownImg from '../assets/images/victory_astral_crown_1795078445702.jpg';
+import victoryBannerDawnImg from '../assets/images/victory_banner_dawn_1795078405542.jpg';
+import victorySwarmSurgeImg from '../assets/images/victory_swarm_surge_1795078403724.jpg';
 export type CgOutcome = 'victory' | 'defeat';
 
 export interface BattleCgSpec {
@@ -33,7 +39,7 @@ export const VICTORY_CGS: BattleCgSpec[] = [
     caption: 'The Hearthclan gatehouse falls at first light as fresh bread passes along the wall.',
     directorNote:
       'Low-angle hero composition with a strong diagonal pennant cutting warm sunrise negative space; grounds victory in warmth and camaraderie rather than cold conquest.',
-    imagePath: '/src/assets/images/victory_banner_dawn_1795078405542.jpg',
+    imagePath: victoryBannerDawnImg,
   },
   {
     id: 'victory_swarm_surge',
@@ -46,7 +52,7 @@ export const VICTORY_CGS: BattleCgSpec[] = [
     caption: 'United across the brook bridge, your Royal Vanguards shatter the enemy palisade.',
     directorNote:
       'Sweeping S-curve depth charge celebrating a decisive elite breakthrough; high-chroma teal silhouettes stay crisp even across dense crowd layering.',
-    imagePath: '/src/assets/images/victory_swarm_surge_1795078403724.jpg',
+    imagePath: victorySwarmSurgeImg,
   },
   {
     id: 'victory_astral_crown',
@@ -59,7 +65,7 @@ export const VICTORY_CGS: BattleCgSpec[] = [
     caption: 'Lanterns drift above the Sun Spire while rival banners bow beneath the twilight sky.',
     directorNote:
       'Ceremonial scale contrast pairing towering brass colossus armor and golden observatory optics against cool cerulean twilight wash for an unforgettable campaign climax.',
-    imagePath: '/src/assets/images/victory_astral_crown_1795078445702.jpg',
+    imagePath: victoryAstralCrownImg,
   },
 ];
 
@@ -75,7 +81,7 @@ export const DEFEAT_CGS: BattleCgSpec[] = [
     caption: 'Shields raised against the valley rain, a single warm lantern guides the tribe home.',
     directorNote:
       'Empathetic, zero-humiliation defeat beat: cool slate rain wash isolates one glowing amber lantern to keep morale intact and encourage an immediate regroup.',
-    imagePath: '/src/assets/images/defeat_rain_retreat_1795078407722.jpg',
+    imagePath: defeatRainRetreatImg,
   },
   {
     id: 'defeat_inches_short',
@@ -88,7 +94,7 @@ export const DEFEAT_CGS: BattleCgSpec[] = [
     caption: 'The enemy wall cracked beneath your vanguard assault—one more knight will break it open.',
     directorNote:
       'High-tension near-miss tableau framing a fractured fortress wall and lone golden arrow in ember light, directly motivating the "+12 Starting Food" comeback retry.',
-    imagePath: '/src/assets/images/defeat_inches_short_1795078407840.jpg',
+    imagePath: defeatInchesShortImg,
   },
   {
     id: 'defeat_siege_eclipse',
@@ -101,7 +107,7 @@ export const DEFEAT_CGS: BattleCgSpec[] = [
     caption: 'Towering brass walkers shadow the fallen bell, yet one drummer beats for tomorrow.',
     directorNote:
       'Operatic silhouette framing with backlit crimson-ochre dust and ink splatter; turns a tough siege loss into dramatic spectacle and signals time to upgrade Food/Age.',
-    imagePath: '/src/assets/images/defeat_siege_eclipse_1795078407548.jpg',
+    imagePath: defeatSiegeEclipseImg,
   },
 ];
 
