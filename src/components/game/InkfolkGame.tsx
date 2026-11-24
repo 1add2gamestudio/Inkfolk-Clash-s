@@ -167,19 +167,48 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
   const recordBattleLogStepChecksRef = useRef(recordBattleLogStepChecks);
   recordBattleLogStepChecksRef.current = recordBattleLogStepChecks;
 
-  // Sync audio preferences
+  // Sync audio preferences & unlock audio cleanly on first user interaction
   useEffect(() => {
     gameAudio.setPreferences(save.soundEnabled, save.hapticsEnabled);
     writeSaveData(save);
   }, [save]);
 
-  // Expose state to document.body for clean game shell & testability; stop vibration on pause/exit
+  useEffect(() => {
+    const unlockOnce = () => {
+      gameAudio.unlock();
+    };
+    const onVisibility = () => {
+      gameAudio.setSuspendedByVisibility(document.hidden);
+    };
+    window.addEventListener('pointerdown', unlockOnce, { passive: true });
+    window.addEventListener('keydown', unlockOnce, { passive: true });
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pointerdown', unlockOnce);
+      window.removeEventListener('keydown', unlockOnce);
+      document.removeEventListener('visibilitychange', onVisibility);
+      gameAudio.setMusicMode('silent');
+    };
+  }, []);
+
+  // Expose state to document.body for clean game shell & testability; sync adaptive BGM & haptics
   useEffect(() => {
     const bodyState =
       phase === 'victory' || phase === 'defeat' ? 'gameover' : phase;
     document.body.dataset.state = bodyState;
     if (phase !== 'playing') {
       gameAudio.stopVibration();
+    }
+    if (phase === 'title') {
+      gameAudio.setMusicMode('title');
+    } else if (phase === 'playing') {
+      gameAudio.setMusicMode('battle');
+    } else if (phase === 'paused') {
+      gameAudio.setMusicMode('paused');
+    } else if (phase === 'victory') {
+      gameAudio.setMusicMode('victory');
+    } else if (phase === 'defeat') {
+      gameAudio.setMusicMode('defeat');
     }
   }, [phase]);
 
@@ -286,6 +315,8 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
       setActiveSubModal('none');
       phaseRef.current = 'playing';
       setPhase('playing');
+      gameAudio.unlock();
+      gameAudio.setMusicMode('battle');
       syncHudFromBattle(nextBattle);
       if (document.activeElement instanceof HTMLElement) {
         document.activeElement.blur();
@@ -436,6 +467,32 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
       hudTick += rawDt;
       if (hudTick >= 0.12 && curPhase === 'playing') {
         hudTick = 0;
+        // Feed live battlefield state into the adaptive medieval BGM layers
+        let aliveAllies = 0;
+        let aliveEnemies = 0;
+        let bossPresent = false;
+        for (let i = 0; i < b.units.length; i++) {
+          const u = b.units[i];
+          if (u.state === 'die') continue;
+          if (u.faction === 'ally') aliveAllies++;
+          else aliveEnemies++;
+          if (u.role === 'heavy') bossPresent = true;
+        }
+        const engagement = Math.min(1, (aliveAllies + aliveEnemies) / 14);
+        const castleDanger =
+          b.allyBaseHp / Math.max(1, b.allyBaseMaxHp) < 0.45 ||
+          b.enemyBaseHp / Math.max(1, b.enemyBaseMaxHp) < 0.45
+            ? 0.25
+            : 0;
+        gameAudio.updateBattleMusic({
+          intensity: Math.min(1, engagement * 0.72 + b.waveTensionLevel * 0.45 + castleDanger),
+          ageIndex: b.allyAgeIndex,
+          waveWarning: Boolean(b.incomingHugeWave),
+          finalCharge: b.finalChargeActive,
+          bossPresent,
+          speedMultiplier: b.speedMultiplier,
+        });
+
         const nextFood = Math.floor(b.food);
         const nextSurgeSec = Math.ceil(b.openingSurgeTimer);
         const nextWaveIdx = b.incomingHugeWave?.index ?? 0;

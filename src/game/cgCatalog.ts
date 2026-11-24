@@ -4,6 +4,7 @@ import defeatSiegeEclipseImg from '../assets/images/defeat_siege_eclipse_1795078
 import victoryAstralCrownImg from '../assets/images/victory_astral_crown_1795078445702.jpg';
 import victoryBannerDawnImg from '../assets/images/victory_banner_dawn_1795078405542.jpg';
 import victorySwarmSurgeImg from '../assets/images/victory_swarm_surge_1795078403724.jpg';
+
 export type CgOutcome = 'victory' | 'defeat';
 
 export interface BattleCgSpec {
