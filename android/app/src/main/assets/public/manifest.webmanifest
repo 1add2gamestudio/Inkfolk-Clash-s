@@ -1,0 +1,24 @@
+{
+  "name": "Inkfolk Clash",
+  "short_name": "Inkfolk Clash",
+  "description": "Storybook watercolor portrait tribe-clash strategy game across five evolving ages.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1B1612",
+  "theme_color": "#E5A952",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
