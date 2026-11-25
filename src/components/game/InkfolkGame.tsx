@@ -152,26 +152,53 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
   const handleBattleCollisionRef = useRef(handleBattleCollision);
   handleBattleCollisionRef.current = handleBattleCollision;
 
-  // Sync audio preferences & unlock audio cleanly on first user interaction
+  // Sync audio preferences & unlock audio cleanly across mobile & desktop gestures
   useEffect(() => {
     gameAudio.setPreferences(save.soundEnabled, save.hapticsEnabled);
     writeSaveData(save);
   }, [save]);
 
+  const handleToggleSound = useCallback(() => {
+    const nextSound = !saveRef.current.soundEnabled;
+    // Call synchronously inside the click gesture so iOS/Android WebViews allow AudioContext unlock
+    gameAudio.setPreferences(nextSound, saveRef.current.hapticsEnabled, true);
+    setSave((prev) => ({ ...prev, soundEnabled: nextSound }));
+  }, []);
+
   useEffect(() => {
-    const unlockOnce = () => {
+    const unlockAudio = () => {
       gameAudio.unlock();
     };
     const onVisibility = () => {
       gameAudio.setSuspendedByVisibility(document.hidden);
     };
-    window.addEventListener('pointerdown', unlockOnce, { passive: true });
-    window.addEventListener('keydown', unlockOnce, { passive: true });
+    const onResumeSignal = () => {
+      if (!document.hidden) {
+        gameAudio.setSuspendedByVisibility(false);
+      }
+    };
+    const gestureEvents: Array<keyof WindowEventMap> = [
+      'pointerdown',
+      'pointerup',
+      'touchstart',
+      'touchend',
+      'mousedown',
+      'click',
+      'keydown',
+    ];
+    for (const ev of gestureEvents) {
+      window.addEventListener(ev, unlockAudio, { capture: true, passive: true });
+    }
     document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pageshow', onResumeSignal);
+    window.addEventListener('focus', onResumeSignal);
     return () => {
-      window.removeEventListener('pointerdown', unlockOnce);
-      window.removeEventListener('keydown', unlockOnce);
+      for (const ev of gestureEvents) {
+        window.removeEventListener(ev, unlockAudio, { capture: true });
+      }
       document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pageshow', onResumeSignal);
+      window.removeEventListener('focus', onResumeSignal);
       gameAudio.setMusicMode('silent');
     };
   }, []);
@@ -251,6 +278,10 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
           }).id
         : null;
 
+      if (earnedCgId && !saveRef.current.unlockedCgIds.includes(earnedCgId)) {
+        setNewlyUnlockedCgId(earnedCgId);
+      }
+
       setSave((prev) => {
         const nextCleared = won && !prev.clearedStageIds.includes(b.stage.id)
           ? [...prev.clearedStageIds, b.stage.id]
@@ -260,9 +291,6 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
           ? Math.min(STAGES.length - 1, Math.max(prev.highestUnlockedStageIdx, stageIdx + 1))
           : prev.highestUnlockedStageIdx;
         const isFirstUnlock = Boolean(earnedCgId && !prev.unlockedCgIds.includes(earnedCgId));
-        if (isFirstUnlock && earnedCgId) {
-          setNewlyUnlockedCgId(earnedCgId);
-        }
         const nextCgIds =
           isFirstUnlock && earnedCgId
             ? [...prev.unlockedCgIds, earnedCgId]
@@ -324,7 +352,7 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
           e.preventDefault();
           startBattleForStage(selectedStageIdxRef.current, 0);
         }
-      } else if (phaseRef.current === 'playing') {
+      } else if (phaseRef.current === 'playing' && battleRef.current.phase === 'playing') {
         if (e.key === 'Escape' || e.key.toLowerCase() === 'p') {
           e.preventDefault();
           setPhase('paused');
@@ -724,9 +752,7 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    setSave((prev) => ({ ...prev, soundEnabled: !prev.soundEnabled }))
-                  }
+                  onClick={handleToggleSound}
                   aria-label="Toggle Sound"
                   className="w-10 h-10 rounded-lg flex items-center justify-center cursor-pointer"
                   style={panelFrame}
@@ -859,7 +885,11 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setPhase('paused')}
+                    onClick={() => {
+                      if (battleRef.current.phase === 'playing') {
+                        setPhase('paused');
+                      }
+                    }}
                     aria-label="Pause Battle"
                     className="w-9 h-9 rounded-lg flex items-center justify-center cursor-pointer"
                     style={panelFrame}
@@ -1660,34 +1690,44 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
           <UpgradesModal
             save={save}
             onUpgradeFood={() => {
-              const cost = getFoodUpgradeCost(save.foodLevel);
-              if (save.coins < cost) return;
+              const cur = saveRef.current;
+              const cost = getFoodUpgradeCost(cur.foodLevel);
+              if (cur.coins < cost) return;
+              const next: SaveData = {
+                ...cur,
+                coins: cur.coins - cost,
+                foodLevel: cur.foodLevel + 1,
+              };
+              saveRef.current = next;
               gameAudio.trigger('upgrade');
-              setSave((prev) => ({
-                ...prev,
-                coins: prev.coins - cost,
-                foodLevel: prev.foodLevel + 1,
-              }));
+              setSave(next);
             }}
             onUpgradeBase={() => {
-              const cost = getBaseUpgradeCost(save.baseLevel);
-              if (save.coins < cost) return;
+              const cur = saveRef.current;
+              const cost = getBaseUpgradeCost(cur.baseLevel);
+              if (cur.coins < cost) return;
+              const next: SaveData = {
+                ...cur,
+                coins: cur.coins - cost,
+                baseLevel: cur.baseLevel + 1,
+              };
+              saveRef.current = next;
               gameAudio.trigger('upgrade');
-              setSave((prev) => ({
-                ...prev,
-                coins: prev.coins - cost,
-                baseLevel: prev.baseLevel + 1,
-              }));
+              setSave(next);
             }}
             onEvolveAge={() => {
-              const age = AGES[save.allyAgeIndex];
-              if (save.allyAgeIndex >= AGES.length - 1 || save.coins < age.evolveCost) return;
+              const cur = saveRef.current;
+              if (cur.allyAgeIndex >= AGES.length - 1) return;
+              const age = AGES[cur.allyAgeIndex];
+              if (cur.coins < age.evolveCost) return;
+              const next: SaveData = {
+                ...cur,
+                coins: cur.coins - age.evolveCost,
+                allyAgeIndex: cur.allyAgeIndex + 1,
+              };
+              saveRef.current = next;
               gameAudio.trigger('evolve');
-              setSave((prev) => ({
-                ...prev,
-                coins: prev.coins - age.evolveCost,
-                allyAgeIndex: prev.allyAgeIndex + 1,
-              }));
+              setSave(next);
             }}
             onClose={() => setActiveSubModal('none')}
           />
@@ -1696,9 +1736,7 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
         {activeSubModal === 'settings' && (
           <SettingsModal
             save={save}
-            onToggleSound={() =>
-              setSave((prev) => ({ ...prev, soundEnabled: !prev.soundEnabled }))
-            }
+            onToggleSound={handleToggleSound}
             onToggleHaptics={() =>
               setSave((prev) => ({ ...prev, hapticsEnabled: !prev.hapticsEnabled }))
             }
@@ -1707,12 +1745,16 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
             }
             onResetSave={() => {
               const clearedSave = clearSaveData();
+              saveRef.current = clearedSave;
               setSave(clearedSave);
               setSelectedStageIdx(0);
               const freshBattle = createBattleState(STAGES[0], clearedSave, 0);
               seedTitleShowcase(freshBattle);
               battleRef.current = freshBattle;
+              resetBattleCollisionAudio();
+              syncHudFromBattle(freshBattle);
               setActiveSubModal('none');
+              phaseRef.current = 'title';
               setPhase('title');
             }}
             onOpenArtPitch={() => {

@@ -8,7 +8,7 @@ import {
   summonPlayerUnit,
   type UnitCollisionEvent,
 } from './engine';
-import type { RandomizedBattleSfxPayload } from './audio';
+import { SoundController, type RandomizedBattleSfxPayload } from './audio';
 import { createCollisionAudioDirector } from './useBattleCollisionAudio';
 
 function makeSeededRand(seed = 42): () => number {
@@ -178,3 +178,167 @@ test('collision audio director triggers randomized steel clashes, war drums, and
   director.handleCollision(makeClash('heavy_impact', 200, 'ally', 'heavy'));
   assert.equal(played.length, countBeforeMute, 'setEnabled(false) silences all collision SFX');
 });
+
+test('SoundController reliably unlocks mobile AudioContext, recovers iOS interrupted/closed states, and prevents zombie SFX queuing while suspended', async () => {
+  let createdContexts = 0;
+  let oscillatorCount = 0;
+  let silentPrimeCount = 0;
+  let resumeCalls = 0;
+  let latestCtx: FakeAudioContext | null = null;
+
+  const makeParam = (initial = 0) => ({
+    value: initial,
+    setValueAtTime(v: number) {
+      this.value = v;
+    },
+    linearRampToValueAtTime(v: number) {
+      this.value = v;
+    },
+    exponentialRampToValueAtTime(v: number) {
+      this.value = v;
+    },
+    setTargetAtTime(v: number) {
+      this.value = v;
+    },
+    cancelScheduledValues() {},
+  });
+
+  class FakeAudioContext {
+    state: 'suspended' | 'running' | 'closed' | 'interrupted' = 'suspended';
+    currentTime = 0;
+    sampleRate = 8000;
+    destination = {};
+    listeners: Array<() => void> = [];
+    allowResume = false;
+
+    constructor() {
+      createdContexts += 1;
+      latestCtx = this;
+    }
+    addEventListener(ev: string, fn: () => void) {
+      if (ev === 'statechange') this.listeners.push(fn);
+    }
+    emitStateChange() {
+      for (const fn of this.listeners) fn();
+    }
+    resume() {
+      resumeCalls += 1;
+      if (this.allowResume) {
+        this.state = 'running';
+        this.currentTime = 0.05;
+        this.emitStateChange();
+      }
+      return Promise.resolve();
+    }
+    suspend() {
+      this.state = 'suspended';
+      this.emitStateChange();
+      return Promise.resolve();
+    }
+    close() {
+      this.state = 'closed';
+      this.emitStateChange();
+      return Promise.resolve();
+    }
+    createGain() {
+      return { gain: makeParam(1), connect() {} };
+    }
+    createBiquadFilter() {
+      return { type: 'lowpass', frequency: makeParam(1000), Q: makeParam(1), gain: makeParam(0), connect() {} };
+    }
+    createOscillator() {
+      oscillatorCount += 1;
+      return {
+        type: 'sine',
+        frequency: makeParam(440),
+        detune: makeParam(0),
+        connect() {},
+        start() {},
+        stop() {},
+      };
+    }
+    createBuffer(channels: number, length: number, sampleRate: number) {
+      const data = Array.from({ length: channels }, () => new Float32Array(length));
+      return {
+        sampleRate,
+        length,
+        getChannelData(ch: number) {
+          return data[ch];
+        },
+      };
+    }
+    createBufferSource() {
+      return {
+        buffer: null as { length: number } | null,
+        connect() {},
+        start() {
+          if (this.buffer && this.buffer.length === 1) {
+            silentPrimeCount += 1;
+          }
+        },
+        stop() {},
+      };
+    }
+  }
+
+  const g = globalThis as unknown as { window?: Record<string, unknown> };
+  const prevWindow = g.window;
+  let intervalActive = false;
+  g.window = {
+    AudioContext: FakeAudioContext,
+    setInterval: () => {
+      intervalActive = true;
+      return 1;
+    },
+    clearInterval: () => {
+      intervalActive = false;
+    },
+  };
+
+  try {
+    const controller = new SoundController();
+    // 1. Mount sets title mode BEFORE user gesture -> must NOT create a doomed pre-gesture AudioContext
+    controller.setMusicMode('title');
+    assert.equal(createdContexts, 0, 'does not create AudioContext before first user gesture');
+
+    // 2. First tap on iOS where pointerdown fails to resume (stays suspended)
+    controller.unlock();
+    assert.equal(createdContexts, 1, 'creates AudioContext on first gesture');
+    assert.ok(silentPrimeCount >= 1, 'primes 1-sample silent hardware buffer on unlock');
+    assert.equal(intervalActive, false, 'waits until AudioContext is running before starting BGM scheduler');
+
+    // 3. Battle starts while context is STILL suspended -> SFX must NOT queue zombie oscillators at t=0
+    controller.setMusicMode('battle');
+    controller.trigger('summon');
+    controller.trigger('hit_heavy');
+    assert.equal(oscillatorCount, 0, 'blocks zombie SFX oscillators while context is suspended');
+
+    // 4. Subsequent touchend/click gesture succeeds in resuming AudioContext -> BGM starts immediately!
+    latestCtx!.allowResume = true;
+    controller.unlock();
+    await Promise.resolve();
+    assert.equal(latestCtx!.state, 'running', 'AudioContext transitions to running');
+    assert.equal(intervalActive, true, 'BGM scheduler starts automatically once context resumes');
+
+    // 5. Running context plays SFX cleanly
+    controller.trigger('summon');
+    assert.ok(oscillatorCount > 0, 'plays SFX oscillators once AudioContext is running');
+
+    // 6. Simulate iOS OS interruption ('interrupted' state) -> visibility/gesture recovers cleanly
+    const resumesBefore = resumeCalls;
+    latestCtx!.state = 'interrupted';
+    controller.setSuspendedByVisibility(false);
+    assert.ok(resumeCalls > resumesBefore, 'recovers from iOS interrupted state on foreground resume');
+    assert.equal(latestCtx!.state, 'running', 'restores running state from interrupted');
+
+    // 7. Simulate OS reclaiming and closing AudioContext -> next tap cleanly recreates it
+    await latestCtx!.close();
+    controller.unlock();
+    assert.equal(createdContexts, 2, 'recreates AudioContext if OS closed the previous one');
+
+    controller.setMusicMode('silent');
+  } finally {
+    g.window = prevWindow;
+  }
+});
+

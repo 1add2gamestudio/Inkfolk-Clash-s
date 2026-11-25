@@ -574,10 +574,18 @@ export function stepBattle(
         }
       } else {
         for (const ally of state.units) {
-          if (ally.faction !== 'ally' || ally.role !== 'melee' || ally.state === 'die') continue;
-          if (Math.abs(ally.x - u.x) <= 15 && Math.abs(ally.laneOffset - u.laneOffset) <= 0.28) {
-            triggerEnemyCombatStop(u);
-            break;
+          if (ally.faction !== 'ally' || ally.state === 'die') continue;
+          if (ally.role === 'melee') {
+            if (Math.abs(ally.x - u.x) <= 15 && Math.abs(ally.laneOffset - u.laneOffset) <= 0.28) {
+              triggerEnemyCombatStop(u);
+              break;
+            }
+          } else if (ally.role === 'heavy') {
+            // Grunts colliding head-on with an Ally Giant stop to fight it; far-lane flankers still bypass
+            if (Math.abs(ally.x - u.x) <= 22 && Math.abs(ally.laneOffset - u.laneOffset) <= 0.44) {
+              triggerEnemyCombatStop(u);
+              break;
+            }
           }
         }
       }
@@ -771,11 +779,16 @@ export function stepBattle(
           const isPiercingAlly = isAllyShot && u.pierceCount > 1;
           let tx = baseTx;
           let ty = aimY;
-          if (isPiercingAlly && targetUnit) {
+          if (isAllyShot && targetUnit) {
+            // Extend arrow flight slightly past aimed enemy (+36 single-target, +95 piercing)
+            // so enemies knocked back mid-flight by knights/giants are still reliably struck.
+            // Single-target arrows (pierceRemaining=1, aimedAtBase=false) still vanish on first enemy hit
+            // and never damage the enemy base.
             const vx = baseTx - sx;
             const vy = aimY - sy;
             const aimDist2D = Math.hypot(vx, vy * LANE_TO_WORLD_X);
-            let maxS = 1 + 95 / Math.max(12, aimDist2D);
+            const overshootDist = isPiercingAlly ? 95 : 36;
+            let maxS = 1 + overshootDist / Math.max(12, aimDist2D);
             if (vx > 0.001) {
               maxS = Math.min(maxS, (ENEMY_BASE_X - 14 - sx) / vx);
             } else if (vx < -0.001) {
@@ -1044,7 +1057,7 @@ export function stepBattle(
           );
         } else {
           const baseEdge = ALLY_BASE_X + 18;
-          if (Math.abs(p.targetX - baseEdge) < 38) {
+          if (p.aimedAtBase ? Math.abs(p.targetX - baseEdge) < 38 : Math.abs(p.targetX - baseEdge) < 18) {
             applyBaseHit(state, 'ally', p.dmg, false, onSound);
           }
         }
@@ -1342,13 +1355,13 @@ function stepEnemyWaves(
           state.tremorPulse = Math.max(state.tremorPulse, 0.92);
           state.slamWaves.push({
             x: WORLD_WIDTH - 10,
-            yOffset: -0.16,
+            yOffset: spawned.preferredLane,
             faction: 'enemy',
             progress: 0,
             radius: 34,
           });
-          emitBurst(state, WORLD_WIDTH - 10, -0.16, '#8C745A', 12);
-          emitBurst(state, WORLD_WIDTH - 10, -0.1, '#A4423C', 6);
+          emitBurst(state, WORLD_WIDTH - 10, spawned.preferredLane, '#8C745A', 12);
+          emitBurst(state, WORLD_WIDTH - 10, spawned.preferredLane + 0.06, '#A4423C', 6);
           onSound?.('giant_stomp');
         }
       }
@@ -1678,9 +1691,11 @@ function applyUnitHit(
       if (attacker.knockback > 0 && other.state !== 'die') {
         const kbMult = other.knockbackImmune ? (isGiant ? 0.35 : 0) : 0.85;
         if (kbMult > 0) {
+          const minX = Math.min(other.x, ALLY_BASE_X + 16);
+          const maxX = Math.max(other.x, ENEMY_BASE_X - 16);
           other.x = Math.min(
-            ENEMY_BASE_X - 16,
-            Math.max(ALLY_BASE_X + 16, other.x + dir * attacker.knockback * kbMult)
+            maxX,
+            Math.max(minX, other.x + dir * attacker.knockback * kbMult)
           );
         }
       }

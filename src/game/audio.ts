@@ -28,11 +28,10 @@ export interface RandomizedBattleSfxPayload {
  */
 function createCourtyardImpulseResponse(
   ctx: AudioContext,
-  durationSec = 1.75,
-  decayPower = 2.6
+  durationSec = 1.35
 ): AudioBuffer {
   const rate = ctx.sampleRate;
-  const length = Math.floor(rate * durationSec);
+  const length = Math.max(1, Math.floor(rate * durationSec));
   const buffer = ctx.createBuffer(2, length, rate);
 
   // Discrete early stone reflections (in seconds)
@@ -47,11 +46,11 @@ function createCourtyardImpulseResponse(
     const data = buffer.getChannelData(ch);
     let lpState = 0;
     for (let i = 0; i < length; i++) {
-      const t = i / length;
-      const env = Math.pow(1 - t, decayPower);
-      // One-pole lowpass damping simulates warm stone absorption over time
+      const rem = 1 - i / length;
+      // Fast algebraic ~2.5 power decay (avoids expensive Math.pow across 130k+ samples on mobile tap)
+      const env = rem * rem * Math.sqrt(rem);
       const white = Math.random() * 2 - 1;
-      const damp = 0.24 + (1 - t) * 0.44;
+      const damp = 0.24 + rem * 0.44;
       lpState = lpState + damp * (white - lpState);
       data[i] = lpState * env * 0.65;
     }
@@ -82,8 +81,23 @@ function createWarmSaturationCurve(drive = 1.35): Float32Array<ArrayBuffer> {
   return curve;
 }
 
-class SoundController {
+function configureMobileAudioSession(): void {
+  if (typeof navigator === 'undefined') return;
+  try {
+    const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+    if (session && session.type !== 'playback') {
+      session.type = 'playback';
+    }
+  } catch {
+    // Ignore unsupported browsers
+  }
+}
+
+export class SoundController {
   private ctx: AudioContext | null = null;
+  private ctxCreatedAtMs = 0;
+  private resumeInFlight: Promise<void> | null = null;
+  private silentBuffer: AudioBuffer | null = null;
   private sfxDry: GainNode | null = null;
   private sfxWet: GainNode | null = null;
   private musicDry: GainNode | null = null;
@@ -106,46 +120,77 @@ class SoundController {
   private lastGiantSlamAt = 0;
   private hasVibrated = false;
 
-  setPreferences(sound: boolean, haptics: boolean): void {
+  setPreferences(sound: boolean, haptics: boolean, fromUserGesture = false): void {
     const wasMuted = !this.soundEnabled;
     this.soundEnabled = sound;
     this.hapticsEnabled = haptics;
     this.music.setEnabled(sound);
 
-    if (sound && wasMuted) {
-      const ctx = this.ensureContext();
-      if (ctx && (this.desiredMusicMode === 'title' || this.desiredMusicMode === 'battle' || this.desiredMusicMode === 'paused')) {
-        this.music.setMode(this.desiredMusicMode);
+    if (sound && (wasMuted || fromUserGesture)) {
+      if (fromUserGesture) {
+        this.unlock();
+      } else if (this.ctx && this.ctx.state === 'running') {
+        this.syncRunningAudio();
       }
     }
 
-    if (this.ctx && this.masterGain) {
+    if (this.ctx && this.masterGain && this.ctx.state === 'running') {
       const now = this.ctx.currentTime;
-      this.masterGain.gain.cancelScheduledValues(now);
-      this.masterGain.gain.setTargetAtTime(sound ? 0.95 : 0.0001, now, 0.04);
+      const g = this.masterGain.gain;
+      const current = Number.isFinite(g.value) ? Math.max(0.0001, g.value) : 0.0001;
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(current, now);
+      g.setTargetAtTime(sound ? 0.95 : 0.0001, now, 0.03);
     }
   }
 
   /**
-   * Call on the first user gesture (pointerdown / keydown) so browser autoplay policy
-   * unlocks Web Audio cleanly and starts the queued title/battle BGM seamlessly.
+   * Call synchronously inside user gestures (touchend / pointerdown / click / keydown)
+   * so iOS Safari, Android Chrome, and mobile WebViews unlock Web Audio reliably.
+   * Safe to call repeatedly: becomes an O(1) fast-path once running and healthy,
+   * while automatically recovering from iOS 'interrupted', 'closed', or frozen-clock states.
    */
   unlock(): void {
     if (!this.soundEnabled) return;
-    const isLoopMode =
-      this.desiredMusicMode === 'title' ||
-      this.desiredMusicMode === 'battle' ||
-      this.desiredMusicMode === 'paused';
-    const ctx = this.ensureContext();
+    configureMobileAudioSession();
+
+    const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    // Detect mobile WebView zombie context (reports 'running' but hardware clock stays frozen at 0)
+    if (
+      this.ctx &&
+      this.ctx.state === 'running' &&
+      this.ctx.currentTime === 0 &&
+      nowMs - this.ctxCreatedAtMs > 350
+    ) {
+      this.resetContext();
+    }
+
+    // Fast path: context is running, clock is advancing, and loop BGM (if desired) is already active
+    if (
+      this.ctx &&
+      this.ctx.state === 'running' &&
+      (this.ctx.currentTime > 0 || nowMs - this.ctxCreatedAtMs <= 350)
+    ) {
+      const wantsLoop =
+        this.desiredMusicMode === 'title' ||
+        this.desiredMusicMode === 'battle' ||
+        this.desiredMusicMode === 'paused';
+      if (!wantsLoop || this.music.isLoopSchedulerActive()) {
+        return;
+      }
+    }
+
+    const ctx = this.ensureContext(true);
     if (!ctx) return;
-    if (ctx.state === 'suspended') {
-      void ctx.resume().then(() => {
-        if (this.soundEnabled && isLoopMode) {
-          this.music.setMode(this.desiredMusicMode);
-        }
-      }).catch(() => {});
-    } else if (isLoopMode) {
-      this.music.setMode(this.desiredMusicMode);
+
+    this.primeSilentHardwareOutput(ctx);
+
+    if (ctx.state === 'running') {
+      this.syncRunningAudio();
+    } else {
+      // Force ctx.resume() inside user gesture: on iOS Safari, an earlier pointerdown/background
+      // ctx.resume() promise can stay pending forever until touchend/click calls resume() again.
+      this.requestResume(ctx, true);
     }
   }
 
@@ -170,12 +215,15 @@ class SoundController {
     }
 
     if (!this.soundEnabled) return;
-    // Only spin up AudioContext if already created or user has interacted
-    if (this.ctx) {
-      if (this.ctx.state === 'suspended') {
-        void this.ctx.resume().catch(() => {});
+
+    // Only touch AudioContext if already created; avoid creating a doomed pre-gesture context on mount
+    if (this.ctx && this.ctx.state !== 'closed') {
+      if (this.ctx.state !== 'running') {
+        this.music.setMode(mode);
+        this.requestResume(this.ctx, false);
+      } else {
+        this.music.setMode(mode);
       }
-      this.music.setMode(mode);
     }
   }
 
@@ -184,53 +232,167 @@ class SoundController {
   }
 
   setSuspendedByVisibility(hidden: boolean): void {
-    if (!this.ctx) return;
+    if (!this.ctx || this.ctx.state === 'closed') return;
     if (hidden) {
       if (this.ctx.state === 'running') {
         void this.ctx.suspend().catch(() => {});
       }
-    } else if (this.soundEnabled && this.ctx.state === 'suspended') {
-      void this.ctx.resume().catch(() => {});
+    } else if (this.soundEnabled) {
+      if (this.ctx.state !== 'running') {
+        this.requestResume(this.ctx, true);
+      } else {
+        this.syncRunningAudio();
+      }
     }
   }
 
-  private ensureContext(): AudioContext | null {
+  private resetContext(): void {
+    const old = this.ctx;
+    this.ctx = null;
+    this.resumeInFlight = null;
+    this.silentBuffer = null;
+    this.sfxDry = null;
+    this.sfxWet = null;
+    this.musicDry = null;
+    this.musicWet = null;
+    this.masterGain = null;
+    this.whiteNoiseBuffer = null;
+    this.pinkNoiseBuffer = null;
+    if (old && old.state !== 'closed') {
+      try {
+        void old.close().catch(() => {});
+      } catch {
+        // Ignore close errors
+      }
+    }
+  }
+
+  private primeSilentHardwareOutput(ctx: AudioContext): void {
+    try {
+      if (!this.silentBuffer || this.silentBuffer.sampleRate !== ctx.sampleRate) {
+        this.silentBuffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+      }
+      const src = ctx.createBufferSource();
+      src.buffer = this.silentBuffer;
+      src.connect(ctx.destination);
+      src.start(0);
+    } catch {
+      // Ignore if context cannot accept sources yet
+    }
+  }
+
+  private requestResume(ctx: AudioContext, force = false): void {
+    if (ctx.state === 'closed' || ctx.state === 'running') return;
+    if (!force && this.resumeInFlight) return;
+    try {
+      const p = ctx.resume();
+      this.resumeInFlight = p
+        .then(() => {
+          if (this.ctx === ctx && ctx.state === 'running') {
+            this.syncRunningAudio();
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (this.resumeInFlight === p) {
+            this.resumeInFlight = null;
+          }
+        });
+    } catch {
+      this.resumeInFlight = null;
+    }
+  }
+
+  private syncRunningAudio(): void {
+    if (!this.ctx || this.ctx.state !== 'running') return;
+    if (this.masterGain) {
+      const now = this.ctx.currentTime;
+      const g = this.masterGain.gain;
+      const target = this.soundEnabled ? 0.95 : 0.0001;
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(target, now);
+    }
+    if (this.soundEnabled) {
+      this.music.syncOnContextRunning(this.desiredMusicMode);
+    }
+  }
+
+  /**
+   * Returns an active, running AudioContext for SFX playback.
+   * Never queues SFX oscillators into a suspended/interrupted context (which causes
+   * mobile voice exhaustion and compressor lockup on resume).
+   */
+  private getRunningContext(): AudioContext | null {
+    if (!this.soundEnabled || typeof window === 'undefined') return null;
+    if (!this.ctx || this.ctx.state === 'closed') return null;
+    if (this.ctx.state !== 'running') {
+      this.requestResume(this.ctx);
+      return null;
+    }
+    return this.ctx;
+  }
+
+  private ensureContext(allowCreate = false): AudioContext | null {
     if (!this.soundEnabled || typeof window === 'undefined') return null;
 
+    if (this.ctx && this.ctx.state === 'closed') {
+      this.resetContext();
+    }
+
     if (!this.ctx) {
+      if (!allowCreate) return null;
+
       const AudioCtx =
         window.AudioContext ||
         (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       if (!AudioCtx) return null;
 
-      const ctx = new AudioCtx();
-      this.ctx = ctx;
+      let ctx: AudioContext;
+      try {
+        ctx = new AudioCtx();
+      } catch {
+        return null;
+      }
+
+      // Immediately resume + prime silent output BEFORE heavy buffer synthesis so we stay well inside
+      // mobile browsers' transient user-activation window.
+      this.primeSilentHardwareOutput(ctx);
+      if (ctx.state !== 'running') {
+        this.requestResume(ctx);
+      }
 
       // Master Chain: Buses -> Warm Saturator -> Dynamics Compressor -> Master Gain -> Destination
       const masterGain = ctx.createGain();
       masterGain.gain.setValueAtTime(this.soundEnabled ? 0.95 : 0.0001, ctx.currentTime);
       masterGain.connect(ctx.destination);
-      this.masterGain = masterGain;
 
       let masterIn: AudioNode = masterGain;
 
-      if (typeof ctx.createDynamicsCompressor === 'function') {
-        const comp = ctx.createDynamicsCompressor();
-        comp.threshold.setValueAtTime(-12, ctx.currentTime);
-        comp.knee.setValueAtTime(16, ctx.currentTime);
-        comp.ratio.setValueAtTime(3.6, ctx.currentTime);
-        comp.attack.setValueAtTime(0.005, ctx.currentTime);
-        comp.release.setValueAtTime(0.16, ctx.currentTime);
-        comp.connect(masterGain);
-        masterIn = comp;
+      try {
+        if (typeof ctx.createDynamicsCompressor === 'function') {
+          const comp = ctx.createDynamicsCompressor();
+          comp.threshold.setValueAtTime(-12, ctx.currentTime);
+          comp.knee.setValueAtTime(16, ctx.currentTime);
+          comp.ratio.setValueAtTime(3.6, ctx.currentTime);
+          comp.attack.setValueAtTime(0.005, ctx.currentTime);
+          comp.release.setValueAtTime(0.16, ctx.currentTime);
+          comp.connect(masterGain);
+          masterIn = comp;
+        }
+      } catch {
+        // Fallback directly to masterGain
       }
 
-      if (typeof ctx.createWaveShaper === 'function') {
-        const shaper = ctx.createWaveShaper();
-        shaper.curve = createWarmSaturationCurve(1.28);
-        shaper.oversample = '2x';
-        shaper.connect(masterIn);
-        masterIn = shaper;
+      try {
+        if (typeof ctx.createWaveShaper === 'function') {
+          const shaper = ctx.createWaveShaper();
+          shaper.curve = createWarmSaturationCurve(1.28);
+          shaper.oversample = '2x';
+          shaper.connect(masterIn);
+          masterIn = shaper;
+        }
+      } catch {
+        // Fallback cleanly without waveshaper
       }
 
       // Global Stone Courtyard Convolution Reverb
@@ -239,11 +401,15 @@ class SoundController {
       reverbReturn.connect(masterIn);
 
       let wetInput: AudioNode = reverbReturn;
-      if (typeof ctx.createConvolver === 'function') {
-        const convolver = ctx.createConvolver();
-        convolver.buffer = createCourtyardImpulseResponse(ctx, 1.75, 2.55);
-        convolver.connect(reverbReturn);
-        wetInput = convolver;
+      try {
+        if (typeof ctx.createConvolver === 'function') {
+          const convolver = ctx.createConvolver();
+          convolver.buffer = createCourtyardImpulseResponse(ctx, 1.35);
+          convolver.connect(reverbReturn);
+          wetInput = convolver;
+        }
+      } catch {
+        // Fallback cleanly if convolver fails on constrained mobile WebView
       }
 
       // Separate SFX & Music Buses for clean mix balance
@@ -263,10 +429,25 @@ class SoundController {
       musicWet.gain.setValueAtTime(0.42, ctx.currentTime);
       musicWet.connect(wetInput);
 
+      this.ctx = ctx;
+      this.ctxCreatedAtMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      this.masterGain = masterGain;
       this.sfxDry = sfxDry;
       this.sfxWet = sfxWet;
       this.musicDry = musicDry;
       this.musicWet = musicWet;
+
+      // Listen for asynchronous mobile state transitions ('suspended'/'interrupted' -> 'running', or 'closed')
+      if (typeof ctx.addEventListener === 'function') {
+        ctx.addEventListener('statechange', () => {
+          if (this.ctx !== ctx) return;
+          if (ctx.state === 'running') {
+            this.syncRunningAudio();
+          } else if (ctx.state === 'closed') {
+            this.resetContext();
+          }
+        });
+      }
 
       // Attach adaptive music composer to the shared acoustic space
       this.music.attach({
@@ -279,8 +460,8 @@ class SoundController {
       this.music.setEnabled(this.soundEnabled);
     }
 
-    if (this.ctx.state === 'suspended') {
-      void this.ctx.resume().catch(() => {});
+    if (this.ctx.state !== 'running') {
+      this.requestResume(this.ctx);
     }
     return this.ctx;
   }
@@ -369,7 +550,7 @@ class SoundController {
     reverbSend = 0.18,
     attack = 0.004
   ): void {
-    const ctx = this.ensureContext();
+    const ctx = this.getRunningContext();
     if (!ctx) return;
 
     const now = ctx.currentTime + delay;
@@ -402,7 +583,7 @@ class SoundController {
     pan = 0,
     reverbSend = 0.32
   ): void {
-    const ctx = this.ensureContext();
+    const ctx = this.getRunningContext();
     if (!ctx) return;
 
     const now = ctx.currentTime + delay;
@@ -442,7 +623,7 @@ class SoundController {
     reverbSend = 0.22,
     attack = 0.004
   ): void {
-    const ctx = this.ensureContext();
+    const ctx = this.getRunningContext();
     if (!ctx) return;
 
     const now = ctx.currentTime + delay;
@@ -481,7 +662,7 @@ class SoundController {
     reverbSend = 0.55,
     filterPeakMult = 4.6
   ): void {
-    const ctx = this.ensureContext();
+    const ctx = this.getRunningContext();
     if (!ctx) return;
 
     const now = ctx.currentTime + delay;
@@ -563,7 +744,7 @@ class SoundController {
   // =========================================================================
 
   playBattleCollisionSfx(payload: RandomizedBattleSfxPayload): void {
-    const ctx = this.ensureContext();
+    const ctx = this.getRunningContext();
     if (!ctx) return;
 
     const { category, variant, pan, intensity, pitchScale } = payload;
@@ -645,7 +826,7 @@ class SoundController {
     vol: number,
     pitch: number
   ): void {
-    const ctx = this.ensureContext();
+    const ctx = this.getRunningContext();
     if (!ctx) return;
 
     const now = ctx.currentTime;
@@ -895,14 +1076,12 @@ class SoundController {
 
       case 'victory': {
         this.stopVibration();
-        this.ensureContext();
         this.setMusicMode('victory');
         break;
       }
 
       case 'defeat': {
         this.stopVibration();
-        this.ensureContext();
         this.setMusicMode('defeat');
         break;
       }

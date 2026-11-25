@@ -23,10 +23,25 @@ export function loadSaveData(): SaveData {
     const raw = window.localStorage.getItem(SAVE_KEY);
     if (!raw) return { ...DEFAULT_SAVE };
     const parsed = JSON.parse(raw) as Partial<SaveData>;
+    const clampInt = (val: unknown, fallback: number, min: number, max?: number): number => {
+      const n = Math.floor(Number(val));
+      if (!Number.isFinite(n)) return fallback;
+      const lower = Math.max(min, n);
+      return max !== undefined ? Math.min(max, lower) : lower;
+    };
     return {
       ...DEFAULT_SAVE,
       ...parsed,
-      timeline: Math.max(1, Math.floor(Number(parsed.timeline) || 1)),
+      timeline: clampInt(parsed.timeline, 1, 1),
+      highestUnlockedStageIdx: clampInt(parsed.highestUnlockedStageIdx, 0, 0, 14),
+      coins: clampInt(parsed.coins, 0, 0),
+      foodLevel: clampInt(parsed.foodLevel, 1, 1),
+      baseLevel: clampInt(parsed.baseLevel, 1, 1),
+      allyAgeIndex: clampInt(parsed.allyAgeIndex, 0, 0, 4),
+      soundEnabled: typeof parsed.soundEnabled === 'boolean' ? parsed.soundEnabled : true,
+      hapticsEnabled: typeof parsed.hapticsEnabled === 'boolean' ? parsed.hapticsEnabled : true,
+      adsRemoved: typeof parsed.adsRemoved === 'boolean' ? parsed.adsRemoved : false,
+      seenGroupTip: typeof parsed.seenGroupTip === 'boolean' ? parsed.seenGroupTip : false,
       clearedStageIds: Array.isArray(parsed.clearedStageIds) ? parsed.clearedStageIds : [],
       unlockedCgIds: Array.isArray(parsed.unlockedCgIds) ? parsed.unlockedCgIds : [],
       claimedAchievementIds: Array.isArray(parsed.claimedAchievementIds)

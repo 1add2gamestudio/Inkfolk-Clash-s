@@ -230,8 +230,12 @@ export class MusicComposer {
     speedMultiplier: 1,
   };
 
+  private pendingOutcomeCue: { mode: 'victory' | 'defeat'; requestedAtMs: number } | null = null;
+
   attach(router: MusicRouter): void {
     if (this.router && this.router.ctx === router.ctx) return;
+    // Cleanly detach any prior AudioContext scheduler before re-attaching (e.g. after mobile 'closed' recovery)
+    this.stopScheduler();
     this.router = router;
 
     const { ctx, musicDry, musicWet } = router;
@@ -260,10 +264,13 @@ export class MusicComposer {
     this.volumeNode = volume;
     this.duckNode = duck;
     this.wetSendNode = wetSend;
+    this.nextNoteTime = ctx.currentTime + 0.06;
 
-    // Apply queued mode if sound is enabled
-    if (this.enabled && (this.mode === 'title' || this.mode === 'battle' || this.mode === 'paused')) {
-      this.applyLoopState();
+    // Only ramp & schedule once the hardware AudioContext is genuinely running
+    if (this.enabled && ctx.state === 'running') {
+      if (this.mode === 'title' || this.mode === 'battle' || this.mode === 'paused') {
+        this.applyLoopState();
+      }
     }
   }
 
@@ -271,12 +278,11 @@ export class MusicComposer {
     this.enabled = enabled;
     if (!enabled) {
       this.stopScheduler();
+      this.pendingOutcomeCue = null;
       if (this.router && this.volumeNode) {
-        const now = this.router.ctx.currentTime;
-        this.volumeNode.gain.cancelScheduledValues(now);
-        this.volumeNode.gain.setTargetAtTime(0.0001, now, 0.05);
+        this.fadeVolume(0.0001, 0.04);
       }
-    } else if (this.router) {
+    } else if (this.router && this.router.ctx.state === 'running') {
       if (this.mode === 'title' || this.mode === 'battle' || this.mode === 'paused') {
         this.applyLoopState();
       }
@@ -303,22 +309,58 @@ export class MusicComposer {
   }
 
   setMode(nextMode: MusicMode): void {
-    if (nextMode === this.mode && (nextMode !== 'victory' && nextMode !== 'defeat')) {
+    const isSameMode = nextMode === this.mode;
+    const isLoopMode = nextMode === 'title' || nextMode === 'battle' || nextMode === 'paused';
+    const isRunning = Boolean(this.router && this.router.ctx.state === 'running');
+
+    if (isSameMode && nextMode !== 'victory' && nextMode !== 'defeat') {
+      // If mode already matches but scheduler was idle (e.g. set before AudioContext resumed), kick it now
+      if (this.enabled && isRunning && isLoopMode && this.timerId === null) {
+        this.applyLoopState();
+      }
       return;
     }
+
     const prevMode = this.mode;
     this.mode = nextMode;
     this.activeModeToken++;
 
-    if (!this.router || !this.enabled) return;
+    if (!this.router || !this.enabled) {
+      if (nextMode === 'victory' || nextMode === 'defeat') {
+        const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        this.pendingOutcomeCue = { mode: nextMode, requestedAtMs: nowMs };
+      } else {
+        this.pendingOutcomeCue = null;
+      }
+      return;
+    }
 
     if (nextMode === 'silent') {
+      this.pendingOutcomeCue = null;
       this.stopScheduler();
       this.fadeVolume(0.0001, 0.14);
       return;
     }
 
+    // If AudioContext is still suspended/interrupted (common during mobile first-tap race),
+    // remember the desired mode cleanly and let syncOnContextRunning() launch it once running!
+    if (!isRunning) {
+      if (nextMode === 'title' || nextMode === 'battle') {
+        if (prevMode !== 'paused' && prevMode !== nextMode) {
+          this.currentStep = 0;
+          this.phraseCycle = 0;
+        }
+        this.pendingOutcomeCue = null;
+      } else if (nextMode === 'victory' || nextMode === 'defeat') {
+        this.stopScheduler();
+        const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        this.pendingOutcomeCue = { mode: nextMode, requestedAtMs: nowMs };
+      }
+      return;
+    }
+
     if (nextMode === 'paused') {
+      this.pendingOutcomeCue = null;
       // Warm muffled stone-hall pause ambiance instead of abrupt silence
       this.fadeFilter(720, 0.12);
       this.fadeVolume(0.28, 0.12);
@@ -329,13 +371,14 @@ export class MusicComposer {
     }
 
     if (nextMode === 'title' || nextMode === 'battle') {
+      this.pendingOutcomeCue = null;
       this.fadeFilter(16500, 0.18);
-      this.fadeVolume(nextMode === 'title' ? 0.82 : 0.92, 0.28);
+      this.fadeVolume(nextMode === 'title' ? 0.82 : 0.92, 0.24);
       // Reset phrase neatly when switching between title & battle (keep position when resuming from pause)
       if (prevMode !== 'paused' && prevMode !== nextMode) {
         this.currentStep = 0;
         this.phraseCycle = 0;
-        this.nextNoteTime = this.router.ctx.currentTime + 0.08;
+        this.nextNoteTime = this.router.ctx.currentTime + 0.06;
       }
       if (this.timerId === null) {
         this.startScheduler();
@@ -344,6 +387,7 @@ export class MusicComposer {
     }
 
     if (nextMode === 'victory') {
+      this.pendingOutcomeCue = null;
       this.stopScheduler();
       this.fadeFilter(16500, 0.04);
       this.fadeVolume(0.0001, 0.09);
@@ -352,6 +396,7 @@ export class MusicComposer {
     }
 
     if (nextMode === 'defeat') {
+      this.pendingOutcomeCue = null;
       this.stopScheduler();
       this.fadeFilter(14000, 0.04);
       this.fadeVolume(0.0001, 0.09);
@@ -360,15 +405,62 @@ export class MusicComposer {
     }
   }
 
+  /**
+   * Called whenever AudioContext transitions into 'running' (initial mobile unlock,
+   * iOS interruption recovery, tab foregrounding, or closed-context recreation).
+   * Always re-applies gain/filter automation and ensures the look-ahead loop is ticking.
+   */
+  syncOnContextRunning(desiredMode: MusicMode): void {
+    this.mode = desiredMode;
+    if (!this.router || !this.enabled || this.router.ctx.state !== 'running') return;
+
+    if (desiredMode === 'title' || desiredMode === 'battle' || desiredMode === 'paused') {
+      this.pendingOutcomeCue = null;
+      this.nextNoteTime = this.router.ctx.currentTime + 0.05;
+      this.applyLoopState();
+      return;
+    }
+
+    if (desiredMode === 'silent') {
+      this.stopScheduler();
+      this.fadeVolume(0.0001, 0.08);
+      return;
+    }
+
+    if (
+      (desiredMode === 'victory' || desiredMode === 'defeat') &&
+      this.pendingOutcomeCue &&
+      this.pendingOutcomeCue.mode === desiredMode
+    ) {
+      const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const ageMs = nowMs - this.pendingOutcomeCue.requestedAtMs;
+      this.pendingOutcomeCue = null;
+      if (ageMs < 2500) {
+        this.stopScheduler();
+        this.fadeFilter(desiredMode === 'victory' ? 16500 : 14000, 0.04);
+        this.fadeVolume(0.0001, 0.06);
+        if (desiredMode === 'victory') {
+          this.playVictoryFanfare();
+        } else {
+          this.playDefeatRequiem();
+        }
+      }
+    }
+  }
+
+  isLoopSchedulerActive(): boolean {
+    return this.timerId !== null;
+  }
+
   private applyLoopState(): void {
-    if (!this.router || !this.enabled) return;
+    if (!this.router || !this.enabled || this.router.ctx.state !== 'running') return;
     if (this.mode === 'paused') {
       this.fadeFilter(720, 0.1);
       this.fadeVolume(0.28, 0.1);
       this.startScheduler();
     } else if (this.mode === 'title' || this.mode === 'battle') {
-      this.fadeFilter(16500, 0.16);
-      this.fadeVolume(this.mode === 'title' ? 0.82 : 0.92, 0.25);
+      this.fadeFilter(16500, 0.14);
+      this.fadeVolume(this.mode === 'title' ? 0.82 : 0.92, 0.22);
       this.startScheduler();
     }
   }
@@ -376,21 +468,27 @@ export class MusicComposer {
   private fadeVolume(target: number, timeConst: number): void {
     if (!this.router || !this.volumeNode) return;
     const now = this.router.ctx.currentTime;
-    this.volumeNode.gain.cancelScheduledValues(now);
-    this.volumeNode.gain.setTargetAtTime(Math.max(0.0001, target), now, timeConst);
+    const gain = this.volumeNode.gain;
+    const current = Number.isFinite(gain.value) ? Math.max(0.0001, gain.value) : 0.0001;
+    gain.cancelScheduledValues(now);
+    gain.setValueAtTime(current, now);
+    gain.setTargetAtTime(Math.max(0.0001, target), now, timeConst);
   }
 
   private fadeFilter(targetHz: number, timeConst: number): void {
     if (!this.router || !this.filterNode) return;
     const now = this.router.ctx.currentTime;
-    this.filterNode.frequency.cancelScheduledValues(now);
-    this.filterNode.frequency.setTargetAtTime(targetHz, now, timeConst);
+    const freq = this.filterNode.frequency;
+    const current = Number.isFinite(freq.value) ? Math.max(120, freq.value) : 16000;
+    freq.cancelScheduledValues(now);
+    freq.setValueAtTime(current, now);
+    freq.setTargetAtTime(targetHz, now, timeConst);
   }
 
   private startScheduler(): void {
     if (!this.router || typeof window === 'undefined') return;
     if (this.timerId !== null) return;
-    this.nextNoteTime = Math.max(this.nextNoteTime, this.router.ctx.currentTime + 0.06);
+    this.nextNoteTime = Math.max(this.nextNoteTime, this.router.ctx.currentTime + 0.05);
     this.timerId = window.setInterval(() => this.scheduleAhead(), 45);
   }
 
@@ -902,10 +1000,11 @@ export class MusicComposer {
     const env = ctx.createGain();
     const attack = brightTrumpet ? 0.032 : 0.068;
     const releaseStart = Math.max(time + attack + 0.01, time + duration - 0.09);
+    const releaseEnd = Math.max(releaseStart + 0.025, time + duration + 0.06);
     env.gain.setValueAtTime(0.0001, time);
     env.gain.linearRampToValueAtTime(volume, time + attack);
     env.gain.setValueAtTime(volume * 0.88, releaseStart);
-    env.gain.exponentialRampToValueAtTime(0.0001, time + duration + 0.06);
+    env.gain.exponentialRampToValueAtTime(0.0001, releaseEnd);
 
     oscA.connect(filter);
     oscB.connect(filter);
@@ -915,9 +1014,9 @@ export class MusicComposer {
     oscA.start(time);
     oscB.start(time);
     lfo.start(time);
-    oscA.stop(time + duration + 0.08);
-    oscB.stop(time + duration + 0.08);
-    lfo.stop(time + duration + 0.08);
+    oscA.stop(releaseEnd + 0.02);
+    oscB.stop(releaseEnd + 0.02);
+    lfo.stop(releaseEnd + 0.02);
   }
 
   private playBowedString(

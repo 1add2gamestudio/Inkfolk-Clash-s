@@ -92,17 +92,18 @@ test('Oathblade melee cleave hits multiple grouped enemy grunts and knocks them 
 
   stepBattle(state, 0.05);
   const enemies = state.units.filter((u) => u.faction === 'enemy');
-  const damagedCount = enemies.filter((u) => u.hp < u.maxHp).length;
-  assert.equal(damagedCount, 4, 'all 4 grouped grunts take cleave damage');
-  assert.ok(enemies.every((u) => u.x > 162), 'knockback pushes enemy pack backward');
+  const damaged = enemies.filter((u) => u.hp < u.maxHp);
+  assert.equal(damaged.length, knight.cleaveCount, 'cleave hits up to cleaveCount grouped grunts');
+  assert.ok(damaged.every((u) => u.x > 162), 'knockback pushes cleaved enemy pack backward');
 });
 
-test('Royal Longbow arrow pierces through multiple enemies along its flight path', () => {
+test('Royal Longbow arrow is single-target (vanishes on first enemy hit) and still lands if target is knocked back', () => {
   const state = createBattleState({ ...STAGES[0], waves: [] }, { ...DEFAULT_SAVE });
   state.food = 20;
   assert.equal(summonPlayerUnit(state, 'ranged'), true);
   const archer = state.units[0];
   archer.x = 100;
+  archer.laneOffset = 0;
   archer.cooldownTimer = 0;
 
   const enemySpec = AGES[0].enemyUnits.melee;
@@ -140,9 +141,13 @@ test('Royal Longbow arrow pierces through multiple enemies along its flight path
     });
   }
 
-  for (let i = 0; i < 20; i++) stepBattle(state, 0.05);
+  // Fire one shot and simulate front enemy being knocked back slightly while arrow is mid-flight
+  stepBattle(state, 0.05);
+  const frontEnemy = state.units.find((u) => u.faction === 'enemy')!;
+  frontEnemy.x += 12;
+  for (let i = 0; i < 12; i++) stepBattle(state, 0.05);
   const damagedCount = state.units.filter((u) => u.faction === 'enemy' && u.hp < 60).length;
-  assert.ok(damagedCount >= 2, `piercing arrow hit ${damagedCount} enemies along path`);
+  assert.equal(damagedCount, 1, `single-target arrow should hit only first enemy even after knockback, hit ${damagedCount}`);
 });
 
 test('high-cost Giant (42 Food) has super-armor, knockback immunity vs grunts, and seismic ground-slam AoE', () => {
@@ -589,7 +594,7 @@ test('C1 stops all enemy spawns after Wave 3 and activates Final Charge (+80% sp
   );
 });
 
-test('allies steer toward densest enemy crowd by role and converge to center lane when field clears', () => {
+test('allies lock cleanly onto castle-threatening enemies without vertical flickering and settle calmly when field clears', () => {
   const state = createBattleState({ ...STAGES[0], waves: [] }, { ...DEFAULT_SAVE });
   state.food = 48;
   assert.equal(summonPlayerUnit(state, 'melee'), true);
@@ -597,9 +602,11 @@ test('allies steer toward densest enemy crowd by role and converge to center lan
   const knight = state.units.find((u) => u.role === 'melee')!;
   const archer = state.units.find((u) => u.role === 'ranged')!;
   knight.x = 70;
-  knight.laneOffset = -0.35;
-  archer.x = 55;
-  archer.laneOffset = -0.5;
+  knight.laneOffset = 0;
+  knight.preferredLane = 0;
+  archer.x = 42;
+  archer.laneOffset = 0.08;
+  archer.preferredLane = 0.08;
 
   const makeEnemy = (x: number, lane: number, role: 'melee' | 'heavy' = 'melee') => ({
     id: state.nextId++,
@@ -633,23 +640,34 @@ test('allies steer toward densest enemy crowd by role and converge to center lan
     knockbackImmune: false,
   });
 
-  // 1 lone grunt in upper lane (-0.7), 4 dense enemies (incl. heavy) in lower lane (+0.7)
+  // Closest castle threat in lower lane (+0.7) plus enemies behind it
   state.units.push(
+    makeEnemy(170, 0.7, 'melee'),
     makeEnemy(210, -0.7, 'melee'),
-    makeEnemy(210, 0.72, 'melee'),
     makeEnemy(215, 0.68, 'melee'),
-    makeEnemy(222, 0.75, 'melee'),
-    makeEnemy(208, 0.7, 'heavy')
+    makeEnemy(222, 0.75, 'melee')
   );
 
-  for (let i = 0; i < 50; i++) stepBattle(state, 0.05);
-  assert.ok(knight.laneOffset > 0.45, `melee should steer toward dense +0.7 crowd, got ${knight.laneOffset.toFixed(2)}`);
-  assert.ok(archer.laneOffset > 0.35, `ranged should align with dense +0.7 pierce lane, got ${archer.laneOffset.toFixed(2)}`);
+  let reversals = 0;
+  let lastDir = 0;
+  for (let i = 0; i < 50; i++) {
+    const prevY = knight.laneOffset;
+    stepBattle(state, 0.05);
+    const dy = knight.laneOffset - prevY;
+    if (Math.abs(dy) > 0.004) {
+      const dir = Math.sign(dy);
+      if (lastDir !== 0 && dir !== lastDir) reversals += 1;
+      lastDir = dir;
+    }
+  }
+  assert.ok(knight.laneOffset > 0.45, `melee should lock and intercept closest +0.7 threat, got ${knight.laneOffset.toFixed(2)}`);
+  assert.ok(reversals <= 1, `melee march should have zero flickering reversals, got ${reversals}`);
+  assert.ok(archer.laneOffset > 0.12, `ranged should gently drift toward enemy front, got ${archer.laneOffset.toFixed(2)}`);
 
-  // Clear all enemies -> allies converge smoothly toward lane 0 (enemy base doorway center)
+  // Clear all enemies -> melee glides calmly toward personal forward lane near center
   state.units = state.units.filter((u) => u.faction === 'ally');
   for (let i = 0; i < 55; i++) stepBattle(state, 0.05);
-  assert.ok(Math.abs(knight.laneOffset) < 0.25, `knight should converge toward center doorway, got ${knight.laneOffset.toFixed(2)}`);
+  assert.ok(Math.abs(knight.laneOffset) < 0.35, `knight should settle near center lane, got ${knight.laneOffset.toFixed(2)}`);
 });
 
 test('slot saturation splits allied melee squads organically across two enemy flanks without synchronized snapping', () => {
