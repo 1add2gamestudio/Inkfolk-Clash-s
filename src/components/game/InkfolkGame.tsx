@@ -1638,20 +1638,11 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
                 </button>
               )}
 
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="p-1.5 rounded-lg bg-[#EFE5D1] border border-[#3A2B23]/25">
-                  <div className="text-[#7D6A5C] text-[10px]">Enemy Base Left</div>
-                  <div className="font-extrabold font-mono-num text-sm">
-                    {Math.round((hud.enemyBaseHp / hud.enemyBaseMaxHp) * 100)}% (
-                    {hud.enemyBaseHp} HP)
-                  </div>
-                </div>
-                <div className="p-1.5 rounded-lg bg-[#EFE5D1] border border-[#3A2B23]/25">
-                  <div className="text-[#7D6A5C] text-[10px]">Coins Salvaged</div>
-                  <div className="font-extrabold font-mono-num text-sm text-[#B46B17]">
-                    +{hud.coinsEarned}
-                  </div>
-                </div>
+              <div className="px-3 py-1.5 rounded-lg bg-[#EFE5D1] border border-[#3A2B23]/25 flex items-center justify-between text-xs">
+                <span className="text-[#7D6A5C] font-semibold">Coins Salvaged</span>
+                <span className="font-extrabold font-mono-num text-sm text-[#B46B17]">
+                  +{hud.coinsEarned}
+                </span>
               </div>
 
               {/* M1 Post-Defeat Rescue Slots (Zero Pre-Battle Ads; Instant-Claim with No-Ads Pass) */}
@@ -1753,33 +1744,18 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
                 >
                   Try Again
                 </button>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const fresh = createBattleState(currentStage, save, 0);
-                      seedTitleShowcase(fresh);
-                      battleRef.current = fresh;
-                      setPhase('title');
-                      setActiveSubModal('upgrades');
-                    }}
-                    className="py-1.5 rounded-xl border-2 border-[#3A2B23] bg-[#EFE5D1] text-xs font-bold cursor-pointer"
-                  >
-                    Upgrade Tribe
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const fresh = createBattleState(currentStage, save, 0);
-                      seedTitleShowcase(fresh);
-                      battleRef.current = fresh;
-                      setPhase('title');
-                    }}
-                    className="py-1.5 rounded-xl border border-[#3A2B23]/40 text-xs font-bold text-[#7D6A5C] cursor-pointer"
-                  >
-                    Title Screen
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const fresh = createBattleState(currentStage, save, 0);
+                    seedTitleShowcase(fresh);
+                    battleRef.current = fresh;
+                    setPhase('title');
+                  }}
+                  className="w-full py-1.5 rounded-xl border border-[#3A2B23]/40 text-xs font-bold text-[#7D6A5C] cursor-pointer"
+                >
+                  Title Screen
+                </button>
               </div>
             </div>
           </div>

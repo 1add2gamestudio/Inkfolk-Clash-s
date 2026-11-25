@@ -1,6 +1,6 @@
 import defeatInchesShortImg from '../assets/images/defeat_inches_short_1795078407840.jpg';
-import defeatRainRetreatImg from '../assets/images/defeat_rain_retreat_1795078407722.jpg';
-import defeatSiegeEclipseImg from '../assets/images/defeat_siege_eclipse_1795078407548.jpg';
+import defeatRainRetreatImg from '../assets/images/defeat_rain_retreat_1795571655585.jpg';
+import defeatSiegeEclipseImg from '../assets/images/defeat_siege_eclipse_1795570789261.jpg';
 import victoryAstralCrownImg from '../assets/images/victory_astral_crown_1795078445702.jpg';
 import victoryBannerDawnImg from '../assets/images/victory_banner_dawn_1795078405542.jpg';
 import victorySwarmSurgeImg from '../assets/images/victory_swarm_surge_1795078403724.jpg';
@@ -77,11 +77,11 @@ export const DEFEAT_CGS: BattleCgSpec[] = [
     slotLabel: 'Defeat CG I',
     achievementName: 'Rain Before Dawn',
     rewardCoins: 15,
-    title: 'Lantern in the Rain',
+    title: 'The Long Road Back',
     triggerRule: 'Early-stage defeat (Enemy base > 35% HP remaining)',
-    caption: 'Shields raised against the valley rain, a single warm lantern guides the tribe home.',
+    caption: 'Cold rain drowns the burning outpost behind them as battered remnants limp into the mist.',
     directorNote:
-      'Empathetic, zero-humiliation defeat beat: cool slate rain wash isolates one glowing amber lantern to keep morale intact and encourage an immediate regroup.',
+      'Somber watercolor retreat framing exhausted, mud-splattered Inkfolk soldiers supporting their wounded away from a smoking gatehouse under slate-gray rain.',
     imagePath: defeatRainRetreatImg,
   },
   {
@@ -101,13 +101,13 @@ export const DEFEAT_CGS: BattleCgSpec[] = [
     id: 'defeat_siege_eclipse',
     outcome: 'defeat',
     slotLabel: 'Defeat CG III',
-    achievementName: 'Bell of Defiance',
+    achievementName: 'Ashes of the Siege',
     rewardCoins: 35,
-    title: 'Bell of the Last Stand',
+    title: 'Silence of the Fallen Bell',
     triggerRule: 'Fall under prolonged or late-era siege (Ch.3+ or 35s+)',
-    caption: 'Towering brass walkers shadow the fallen bell, yet one drummer beats for tomorrow.',
+    caption: 'The siege bell lies cracked in the ash as giant shadows loom over the fallen vanguard.',
     directorNote:
-      'Operatic silhouette framing with backlit crimson-ochre dust and ink splatter; turns a tough siege loss into dramatic spectacle and signals time to upgrade Food/Age.',
+      'Somber defeat composition pairing a slumped, exhausted Inkfolk soldier beside a cracked bronze bell against looming steam colossi in ash-choked twilight.',
     imagePath: defeatSiegeEclipseImg,
   },
 ];
