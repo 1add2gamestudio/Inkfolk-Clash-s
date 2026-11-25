@@ -52,8 +52,6 @@ export function renderBattleCanvas(
     ctx.translate(shakeX, shakeY);
   }
 
-  const tension =
-    state.phase === 'playing' ? Math.min(1, Math.max(0, state.waveTensionLevel || 0)) : 0;
   const endProgress =
     state.phase === 'victory' || state.phase === 'defeat'
       ? Math.min(
@@ -78,7 +76,7 @@ export function renderBattleCanvas(
   const sunX = width * 0.72 + Math.sin(state.time * 0.2) * 3;
   const sunY = horizonY - 82;
   ctx.save();
-  ctx.globalAlpha = vicT > 0 ? 1 : Math.max(0.18, 1 - tension * 0.8);
+  ctx.globalAlpha = 1;
   ctx.fillStyle = vicT > 0 ? 'rgba(245, 200, 92, 0.45)' : 'rgba(218, 165, 86, 0.24)';
   ctx.beginPath();
   ctx.arc(sunX, sunY, 34 + vicT * 26, 0, Math.PI * 2);
@@ -344,6 +342,25 @@ export function renderBattleCanvas(
     } else {
       drawHearthclanGrunt(ctx, unit, ux, uy);
     }
+
+    // Minimalist ink '!' cue (0.45s fade) when a castle-rushing enemy is struck/intercepted into combat
+    if (unit.faction === 'enemy' && unit.state !== 'die' && (unit.aggroAlertTimer ?? 0) > 0) {
+      const alertT = Math.min(1, (unit.aggroAlertTimer ?? 0) / 0.45);
+      const pop = (1 - alertT) * 5;
+      const headOffset = unit.role === 'heavy' ? 86 : 30 * unit.scale;
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, alertT * 1.45);
+      ctx.translate(ux, uy - headOffset - pop);
+      ctx.font = '900 13px Georgia, serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = INK_PALETTE.ink;
+      ctx.strokeText('!', 0, 0);
+      ctx.fillStyle = '#F5C16C';
+      ctx.fillText('!', 0, 0);
+      ctx.restore();
+    }
   }
 
   // 5. Projectiles
@@ -417,54 +434,7 @@ export function renderBattleCanvas(
   ctx.fillStyle = vig;
   ctx.fillRect(0, 0, width, height);
 
-  // Pre-Wave Darkening + Rhythmic Warning Flash
-  if (tension > 0.01) {
-    const isPreWave = Boolean(state.incomingHugeWave);
-    // Rhythmic alert pulse (~1.8 flashes/sec) while pre-wave countdown is active
-    const flashWave = isPreWave ? Math.pow(0.5 + 0.5 * Math.sin(state.time * 11.5), 2.0) : 0;
-
-    // 1. Full-screen atmospheric darkening wash (modulates slightly with flash pulse)
-    const dimAlpha = tension * (isPreWave ? 0.32 + (1 - flashWave) * 0.1 : 0.22);
-    ctx.fillStyle = `rgba(14, 13, 20, ${dimAlpha.toFixed(3)})`;
-    ctx.fillRect(-10, -10, width + 20, height + 20);
-
-    // 2. Deep moody outer border darkening
-    const darkVig = ctx.createRadialGradient(
-      width * 0.5,
-      height * 0.5,
-      width * 0.22,
-      width * 0.5,
-      height * 0.5,
-      Math.max(width, height) * 0.72
-    );
-    darkVig.addColorStop(0, 'rgba(12, 10, 16, 0)');
-    darkVig.addColorStop(1, `rgba(12, 10, 16, ${(tension * 0.42).toFixed(3)})`);
-    ctx.fillStyle = darkVig;
-    ctx.fillRect(-10, -10, width + 20, height + 20);
-
-    // 3. Rhythmic pre-wave warning flash (crimson-amber edge pulse + subtle alert crest shimmer)
-    if (isPreWave && flashWave > 0.04) {
-      const flashVig = ctx.createRadialGradient(
-        width * 0.5,
-        height * 0.48,
-        width * (0.28 - flashWave * 0.06),
-        width * 0.5,
-        height * 0.48,
-        Math.max(width, height) * 0.68
-      );
-      flashVig.addColorStop(0, 'rgba(185, 36, 30, 0)');
-      flashVig.addColorStop(0.62, `rgba(185, 36, 30, ${(flashWave * tension * 0.1).toFixed(3)})`);
-      flashVig.addColorStop(1, `rgba(180, 28, 24, ${(flashWave * tension * 0.36).toFixed(3)})`);
-      ctx.fillStyle = flashVig;
-      ctx.fillRect(-10, -10, width + 20, height + 20);
-
-      const crest = Math.pow(flashWave, 2.4) * tension * 0.11;
-      if (crest > 0.008) {
-        ctx.fillStyle = `rgba(255, 224, 178, ${crest.toFixed(3)})`;
-        ctx.fillRect(-10, -10, width + 20, height + 20);
-      }
-    }
-  }
+  // Pre-wave darkening & bright/dark rhythmic flash disabled for a calmer visual experience
 
   // Ally Low-HP (<=25%) Warning OR Defeat Collapse: Crimson Heartbeat Vignette & Cold Rain Fade
   const allyHpRatio = state.allyBaseHp / Math.max(1, state.allyBaseMaxHp);
@@ -1786,6 +1756,10 @@ function drawHearthclanGrunt(
 
   ctx.scale(-u.scale, u.scale);
   ctx.translate(0, -walkBob);
+  // Subtle forward-leaning sprint posture while rushing straight for the ally castle
+  if (!isDead && !isGiant && u.state === 'walk' && !u.engaged) {
+    ctx.rotate(0.09);
+  }
 
   ctx.strokeStyle = INK_PALETTE.ink;
   ctx.lineWidth = 1.45;
@@ -2929,13 +2903,18 @@ function drawInkProjectile(
   ctx.translate(px, py);
 
   if (p.faction === 'ally') {
-    // Piercing silver-gold royal arrow with subtle golden flight streak
-    const angle = Math.cos(t * Math.PI) * -0.14;
+    // Piercing silver-gold royal arrow aligned to true 2D corridor trajectory (supports downward/diagonal/rear shots)
+    const dxPx = (p.targetX - p.startX) * scaleX;
+    const dyPx = (p.targetYOffset - p.yOffset) * laneHalfH - Math.cos(t * Math.PI) * Math.PI * p.arcHeight;
+    const angle = Math.hypot(dxPx, dyPx) > 0.01 ? Math.atan2(dyPx, dxPx) : 0;
     ctx.rotate(angle);
-    ctx.strokeStyle = 'rgba(233, 186, 88, 0.55)';
-    ctx.lineWidth = 2;
+    const hasPierced = p.hitUnitIds.length > 0;
+    ctx.strokeStyle = hasPierced
+      ? 'rgba(243, 211, 122, 0.78)'
+      : 'rgba(233, 186, 88, 0.58)';
+    ctx.lineWidth = hasPierced ? 2.4 : 2;
     ctx.beginPath();
-    ctx.moveTo(-12, 0);
+    ctx.moveTo(hasPierced ? -17 : -13, 0);
     ctx.lineTo(-2, 0);
     ctx.stroke();
 

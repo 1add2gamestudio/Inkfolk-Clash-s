@@ -22,6 +22,10 @@ export const ALLY_BASE_X = 38;
 export const ENEMY_BASE_X = 322;
 export const GIANT_BEHIND_BASE_CLEARANCE = 24;
 export const GIANT_BEHIND_BASE_LANE = -0.62;
+const GIANT_LANE_SLOTS = [-0.14, 0.34, -0.52] as const;
+const GIANT_RANGE_STAGGER = [0, 8, -6] as const;
+const GIANT_LANE_MIN = -0.58;
+const GIANT_LANE_MAX = 0.48;
 const MAX_ALLY_ELITES = 30;
 const MAX_UNITS_PER_SIDE = 95;
 const MAX_PARTICLES = 160;
@@ -167,6 +171,7 @@ export function createBattleState(
     enemiesDefeated: 0,
     allyBaseHp: allyBaseMax,
     allyBaseMaxHp: allyBaseMax,
+    allyBaseDamageTaken: 0,
     enemyBaseHp: enemyBaseMax,
     enemyBaseMaxHp: enemyBaseMax,
     allyBaseHitFlash: 0,
@@ -276,29 +281,75 @@ function buildUnit(
   const dmg = Math.max(1, Math.round(spec.dmg * dmgMult));
 
   // Personal lane preference prevents synchronized hive-mind snapping:
-  // - Giants walk along mid-back spine (-0.16) so they tower behind brawling footmen
+  // - Giants auto-assign across 3 staggered corridors (mid-back, lower-front, upper-back)
+  //   plus echelon range stagger so same-faction Giants never overlap while marching or sieging
   // - Ally Ranged cycles cleanly across 3 staggered volley lanes
   // - Ally Melee has gentle individual lane spread; Enemies spread across full road
   let preferredLane: number;
+  let giantRangeOffset = 0;
   if (isGiant) {
-    preferredLane = -0.16;
+    const slotCounts = GIANT_LANE_SLOTS.map(() => 0);
+    for (const existing of state.units) {
+      if (existing.faction !== faction || existing.role !== 'heavy' || existing.state === 'die') {
+        continue;
+      }
+      let nearestIdx = 0;
+      let nearestDist = Infinity;
+      for (let i = 0; i < GIANT_LANE_SLOTS.length; i++) {
+        const d = Math.abs(existing.preferredLane - GIANT_LANE_SLOTS[i]);
+        if (d < nearestDist) {
+          nearestDist = d;
+          nearestIdx = i;
+        }
+      }
+      slotCounts[nearestIdx] += 1;
+    }
+    let chosenSlot = 0;
+    for (let i = 1; i < slotCounts.length; i++) {
+      if (slotCounts[i] < slotCounts[chosenSlot]) {
+        chosenSlot = i;
+      }
+    }
+    const occupancy = slotCounts[chosenSlot];
+    const extraLaneJitter =
+      occupancy === 0 ? 0 : (occupancy % 2 === 1 ? 1 : -1) * (chosenSlot === 1 ? -0.1 : 0.1);
+    preferredLane = Math.max(
+      GIANT_LANE_MIN,
+      Math.min(GIANT_LANE_MAX, GIANT_LANE_SLOTS[chosenSlot] + extraLaneJitter)
+    );
+    giantRangeOffset =
+      GIANT_RANGE_STAGGER[chosenSlot] + (occupancy > 0 ? occupancy * 7 : 0);
   } else if (isAlly && role === 'ranged') {
     const slots = [-0.56, 0.08, 0.62];
     preferredLane = slots[state.nextId % slots.length] + (nextRand(state) * 0.14 - 0.07);
   } else if (isAlly) {
-    preferredLane = nextRand(state) * 1.15 - 0.52;
+    const meleeSlots = [-0.46, 0.0, 0.46];
+    preferredLane = meleeSlots[state.nextId % meleeSlots.length] + (nextRand(state) * 0.16 - 0.08);
   } else {
     preferredLane = nextRand(state) * 1.68 - 0.82;
   }
 
-  // Mechanical Giants stride in from behind the left/right castles so bases are never occluded
-  const spawnX = isGiant
+  // Mechanical Giants stride in from behind the left/right castles so bases are never occluded.
+  // If another same-faction Giant just spawned behind the castle, queue slightly behind it.
+  let spawnX = isGiant
     ? isAlly
       ? -24
       : WORLD_WIDTH + 24
     : isAlly
       ? ALLY_BASE_X - 4
       : ENEMY_BASE_X - 18;
+  if (isGiant) {
+    for (const existing of state.units) {
+      if (existing.faction !== faction || existing.role !== 'heavy' || existing.state === 'die') {
+        continue;
+      }
+      if (isAlly && existing.x < ALLY_BASE_X + 12) {
+        spawnX = Math.min(spawnX, existing.x - 22);
+      } else if (!isAlly && existing.x > ENEMY_BASE_X - 12) {
+        spawnX = Math.max(spawnX, existing.x + 22);
+      }
+    }
+  }
   const spawnLane = isGiant ? GIANT_BEHIND_BASE_LANE : isAlly ? 0 : preferredLane;
 
   return {
@@ -314,7 +365,7 @@ function buildUnit(
     hp: maxHp,
     maxHp,
     dmg,
-    range: spec.range,
+    range: Math.max(24, spec.range + giantRangeOffset),
     speed: spec.speed * (0.95 + nextRand(state) * 0.1),
     attackCooldown: spec.attackCooldown,
     cooldownTimer: nextRand(state) * 0.16,
@@ -331,6 +382,10 @@ function buildUnit(
     auraDefense: spec.auraDefense ?? 0,
     armorReduction: spec.armorReduction ?? 0,
     knockbackImmune: spec.knockbackImmune ?? false,
+    engaged: isAlly,
+    engageTimer: 0,
+    aggroAlertTimer: 0,
+    lockedTargetId: null,
   };
 }
 
@@ -357,13 +412,13 @@ export function summonPlayerUnit(
     state.tremorPulse = Math.max(state.tremorPulse, 0.85);
     state.slamWaves.push({
       x: 12,
-      yOffset: -0.16,
+      yOffset: unit.preferredLane,
       faction: 'ally',
       progress: 0,
       radius: 32,
     });
-    emitBurst(state, 10, -0.16, '#E9BA58', 12);
-    emitBurst(state, 10, -0.1, '#8C745A', 8);
+    emitBurst(state, 10, unit.preferredLane, '#E9BA58', 12);
+    emitBurst(state, 10, unit.preferredLane + 0.06, '#8C745A', 8);
     onSound?.('giant_stomp');
   } else {
     emitBurst(state, ALLY_BASE_X + 2, 0, '#C98A2C', 6);
@@ -487,18 +542,172 @@ export function stepBattle(
 
     u.spawnAge += dt;
     u.cooldownTimer = Math.max(0, u.cooldownTimer - dt);
+    if ((u.aggroAlertTimer ?? 0) > 0) {
+      u.aggroAlertTimer = Math.max(0, (u.aggroAlertTimer ?? 0) - dt);
+    }
+    if (u.faction === 'enemy' && (u.engageTimer ?? 0) > 0) {
+      u.engageTimer = Math.max(0, (u.engageTimer ?? 0) - dt);
+    }
     const dir = u.faction === 'ally' ? 1 : -1;
 
-    // Acquire closest opponent in range
-    let targetUnit: BattleUnit | null = null;
-    let bestDist = Infinity;
+    // Enemy stateless Rush <-> Stop-and-Fight logic (zero aggro memory, zero chasing):
+    // - By default enemies rush straight along their own lane toward the ally castle
+    // - Taking damage, being body-blocked head-on by an ally Melee knight, or meeting an ally Giant
+    //   activates a brief engageTimer so they stop to fight allies right inside their local attack range
+    // - They NEVER chase or steer sideways; the moment no ally is in range, they keep walking straight to our castle
+    if (u.faction === 'enemy') {
+      if (u.role === 'heavy') {
+        for (const ally of state.units) {
+          if (ally.faction !== 'ally' || ally.role !== 'heavy' || ally.state === 'die') continue;
+          const dx = (ally.x - u.x) * dir;
+          if (dx >= -18 && dx <= u.range) {
+            triggerEnemyCombatStop(u);
+            break;
+          }
+        }
+      } else {
+        for (const ally of state.units) {
+          if (ally.faction !== 'ally' || ally.role !== 'melee' || ally.state === 'die') continue;
+          if (Math.abs(ally.x - u.x) <= 15 && Math.abs(ally.laneOffset - u.laneOffset) <= 0.28) {
+            triggerEnemyCombatStop(u);
+            break;
+          }
+        }
+      }
+    }
 
-    for (const other of state.units) {
-      if (other.faction === u.faction || other.state === 'die') continue;
-      const dx = (other.x - u.x) * dir;
-      if (dx >= -10 && dx <= u.range && dx < bestDist) {
-        bestDist = dx;
-        targetUnit = other;
+    // Acquire opponent in range:
+    // - Ally Melee: locks onto one castle-threatening, load-balanced enemy during march and stays
+    //   committed along a straight diagonal intercept until entering 2D melee reach and killing it.
+    // - Ally Ranged & Heavy: prioritize enemies closest to ally castle and lock until killed.
+    // - Enemies: only stop to fight if recently struck/body-blocked (engageTimer > 0) AND an ally is
+    //   right inside their local attack range.
+    let targetUnit: BattleUnit | null = null;
+    let marchLockedUnit: BattleUnit | null = null;
+    let bestScore = Infinity;
+    const minDx = u.role === 'ranged' ? -u.range * 0.85 : -u.range;
+    const shouldTargetUnits = u.faction === 'ally' || (u.engageTimer ?? 0) > 0;
+
+    if (u.faction === 'ally' && u.role === 'melee') {
+      if (u.lockedTargetId != null) {
+        const locked = state.units.find(
+          (other) =>
+            other.id === u.lockedTargetId &&
+            other.faction === 'enemy' &&
+            other.state !== 'die'
+        );
+        if (locked && locked.x >= u.x - 58 && locked.x - u.x <= 250) {
+          marchLockedUnit = locked;
+        } else {
+          u.lockedTargetId = null;
+        }
+      }
+
+      // If locked target is already in true 2D melee reach, engage it immediately
+      if (marchLockedUnit) {
+        const lockedDx = (marchLockedUnit.x - u.x) * dir;
+        if (
+          lockedDx >= minDx &&
+          lockedDx <= u.range &&
+          isInMeleeLaneReach(u, marchLockedUnit)
+        ) {
+          targetUnit = marchLockedUnit;
+        }
+      }
+
+      // Point-blank self-defense: if an enemy collides right into our sword while we are still marching
+      // toward a distant target, lock onto this colliding enemy immediately instead of walking through it
+      if (!targetUnit) {
+        let pointBlank: BattleUnit | null = null;
+        let pointBlankScore = Infinity;
+        for (const other of state.units) {
+          if (other.faction !== 'enemy' || other.state === 'die') continue;
+          const dx = (other.x - u.x) * dir;
+          if (dx >= minDx && dx <= u.range && isInMeleeLaneReach(u, other)) {
+            const laneDiff = Math.abs(other.laneOffset - u.laneOffset);
+            const sc = dx + laneDiff * 10;
+            if (sc < pointBlankScore) {
+              pointBlankScore = sc;
+              pointBlank = other;
+            }
+          }
+        }
+        if (pointBlank) {
+          u.lockedTargetId = pointBlank.id;
+          marchLockedUnit = pointBlank;
+          targetUnit = pointBlank;
+        }
+      }
+
+      // No locked march target yet -> acquire one load-balanced castle-threatening enemy cleanly
+      if (!targetUnit && !marchLockedUnit) {
+        const acquired = acquireAllyMarchTarget(state, u);
+        if (acquired) {
+          u.lockedTargetId = acquired.id;
+          marchLockedUnit = acquired;
+          const dx = (acquired.x - u.x) * dir;
+          if (dx >= minDx && dx <= u.range && isInMeleeLaneReach(u, acquired)) {
+            targetUnit = acquired;
+          }
+        }
+      }
+    } else if (u.faction === 'ally' && u.lockedTargetId != null) {
+      const locked = state.units.find(
+        (other) =>
+          other.id === u.lockedTargetId &&
+          other.faction !== u.faction &&
+          other.state !== 'die'
+      );
+      if (locked) {
+        const lockedDx = (locked.x - u.x) * dir;
+        const keepBuffer = u.role === 'heavy' ? 22 : 24;
+        if (lockedDx >= minDx && lockedDx <= u.range) {
+          targetUnit = locked;
+        } else if (lockedDx < minDx - 8 || lockedDx > u.range + keepBuffer) {
+          u.lockedTargetId = null;
+        }
+      } else {
+        u.lockedTargetId = null;
+      }
+    }
+
+    if (
+      !targetUnit &&
+      shouldTargetUnits &&
+      !(u.faction === 'ally' && u.role === 'melee') &&
+      (u.faction !== 'ally' || u.lockedTargetId == null)
+    ) {
+      for (const other of state.units) {
+        if (other.faction === u.faction || other.state === 'die') continue;
+        const dx = (other.x - u.x) * dir;
+        if (dx >= minDx && dx <= u.range) {
+          const laneDiff = Math.abs(other.laneOffset - u.laneOffset);
+          if (u.faction === 'enemy' && u.role === 'melee' && laneDiff > 0.55) {
+            continue;
+          }
+          const score = dx + laneDiff * 2.5;
+          if (score < bestScore) {
+            bestScore = score;
+            targetUnit = other;
+          }
+        }
+      }
+      if (u.faction === 'ally' && targetUnit) {
+        u.lockedTargetId = targetUnit.id;
+      }
+    }
+
+    // Enemies never chase: if actively fighting an ally who leaves range or dies, drop engagement immediately
+    // and resume marching straight toward the ally castle along their own lane
+    if (u.faction === 'enemy') {
+      if (targetUnit) {
+        u.engaged = true;
+        u.engageTimer = Math.max(u.engageTimer ?? 0, 1.4);
+      } else {
+        if (u.engaged) {
+          u.engaged = false;
+          u.engageTimer = 0;
+        }
       }
     }
 
@@ -509,6 +718,17 @@ export function stepBattle(
     if (targetUnit || canHitBase) {
       const wasWalking = u.state === 'walk';
       u.state = 'attack';
+
+      // Gentle deadzoned lane settle during melee duel (only nudges if visibly off-center, zero jitter)
+      if (targetUnit && u.faction === 'ally' && u.role === 'melee') {
+        const fightSlot = ((u.id % 3) - 1) * 0.09;
+        const idealLane = Math.max(-0.85, Math.min(0.85, targetUnit.laneOffset + fightSlot));
+        const laneDelta = idealLane - u.laneOffset;
+        if (Math.abs(laneDelta) > 0.14) {
+          const step = Math.min(Math.abs(laneDelta), 0.34 * dt);
+          u.laneOffset = Math.max(-0.88, Math.min(0.88, u.laneOffset + Math.sign(laneDelta) * step));
+        }
+      }
 
       // First contact when advancing melee/heavy troops collide with an opposing line
       if (wasWalking && targetUnit && u.role !== 'ranged') {
@@ -531,29 +751,52 @@ export function stepBattle(
         u.attackAnimTimer = u.role === 'heavy' ? 0.52 : 0.26;
 
         if (u.role === 'ranged') {
+          const LANE_TO_WORLD_X = 68;
+          const sx = u.x;
+          const sy = u.laneOffset;
           const baseTx = targetUnit ? targetUnit.x : oppBaseEdge;
-          const tx =
-            u.faction === 'ally' && u.pierceCount > 1
-              ? Math.min(ENEMY_BASE_X - 16, baseTx + 44)
-              : baseTx;
-          const ty = targetUnit ? targetUnit.laneOffset : 0;
-          const travelDist = Math.abs(tx - u.x);
+          const aimY = targetUnit ? targetUnit.laneOffset : 0;
+          const isPiercingAlly = u.faction === 'ally' && u.pierceCount > 1;
+          let tx = baseTx;
+          let ty = aimY;
+          if (isPiercingAlly && targetUnit) {
+            // Uniform 2D ray-box projection: extend straight past (baseTx, aimY) by up to +95 world units
+            // along the EXACT vector from shooter -> target so the arrow ALWAYS passes directly through
+            // targets straight below, straight above, diagonally close, or behind the archer!
+            const vx = baseTx - sx;
+            const vy = aimY - sy;
+            const aimDist2D = Math.hypot(vx, vy * LANE_TO_WORLD_X);
+            let maxS = 1 + 95 / Math.max(12, aimDist2D);
+            if (vx > 0.001) {
+              maxS = Math.min(maxS, (ENEMY_BASE_X - 14 - sx) / vx);
+            } else if (vx < -0.001) {
+              maxS = Math.min(maxS, (ALLY_BASE_X + 6 - sx) / vx);
+            }
+            if (vy > 0.001) {
+              maxS = Math.min(maxS, (0.98 - sy) / vy);
+            } else if (vy < -0.001) {
+              maxS = Math.min(maxS, (-0.98 - sy) / vy);
+            }
+            const finalS = Math.max(1.0, maxS);
+            tx = sx + vx * finalS;
+            ty = sy + vy * finalS;
+          }
+          const travelDist2D = Math.hypot(tx - sx, (ty - sy) * LANE_TO_WORLD_X);
           state.projectiles.push({
             id: state.nextId++,
             faction: u.faction,
             ageIndex: u.ageIndex,
-            x: u.x,
-            yOffset: u.laneOffset,
-            startX: u.x,
+            x: sx,
+            yOffset: sy,
+            startX: sx,
             targetX: tx,
             targetYOffset: ty,
             progress: 0,
-            duration: Math.max(0.22, travelDist / (u.faction === 'ally' ? 230 : 180)),
+            duration: Math.max(0.16, travelDist2D / (isPiercingAlly ? 265 : 185)),
             dmg: u.dmg,
-            arcHeight:
-              u.faction === 'ally'
-                ? 5 + travelDist * 0.045
-                : 16 + travelDist * 0.13,
+            arcHeight: isPiercingAlly
+              ? 3.0 + travelDist2D * 0.022
+              : 16 + travelDist2D * 0.13,
             pierceRemaining: u.pierceCount,
             hitUnitIds: [],
           });
@@ -574,7 +817,21 @@ export function stepBattle(
       const moveSpeed =
         u.faction === 'ally' && state.finalChargeActive ? u.speed * 1.8 : u.speed;
       const prevPhase = u.walkPhase;
-      u.x += dir * moveSpeed * dt;
+      let stepX = dir * moveSpeed * dt;
+      if (u.faction === 'ally' && u.role === 'melee' && marchLockedUnit) {
+        // Intercept locked enemy cleanly in 2D without overshooting past it while closing vertical distance
+        const interceptX = marchLockedUnit.x - Math.min(12, u.range * 0.65);
+        if (u.x < interceptX - 2) {
+          stepX = Math.min(moveSpeed * dt, interceptX - u.x);
+        } else if (u.x > marchLockedUnit.x + Math.min(10, u.range * 0.55)) {
+          // Locked enemy slipped slightly behind -> turn to intercept and finish it
+          stepX = -Math.min(moveSpeed * 0.85 * dt, u.x - marchLockedUnit.x);
+        } else {
+          // Already horizontally aligned -> hold X while gliding smoothly vertically into melee reach
+          stepX = 0;
+        }
+      }
+      u.x += stepX;
       u.walkPhase += moveSpeed * dt * (u.role === 'heavy' ? 0.34 : 0.45);
 
       // Weighty Mechanical Colossus hydraulic footstep dust, smokestack exhaust & micro-tremor
@@ -605,38 +862,46 @@ export function stepBattle(
           // Small allies stay centered inside doorway arch while pushing out
           u.laneOffset = 0;
         } else {
-          const desiredLane = computeAllyDesiredLane(state, u);
+          const desiredLane = computeAllyDesiredLane(state, u, marchLockedUnit);
           u.targetLaneOffset = desiredLane;
-          const curvingOutFromBase = u.role === 'heavy' && u.laneOffset < -0.26;
-          // Capped smooth diagonal march speed (eliminates sudden synchronized sideways snapping)
+          const curvingOutFromBase =
+            u.role === 'heavy' && Math.abs(u.laneOffset - desiredLane) > 0.14;
           const maxLatSpeed = state.finalChargeActive
             ? 0.95
             : curvingOutFromBase
-              ? 0.56
+              ? 0.58
               : u.role === 'heavy'
-                ? 0.22
+                ? 0.34
                 : u.role === 'ranged'
-                  ? 0.42
-                  : 0.65;
+                  ? 0.34
+                  : marchLockedUnit
+                    ? 0.78
+                    : 0.52;
           const delta = desiredLane - u.laneOffset;
-          const maxStep = maxLatSpeed * dt;
-          if (Math.abs(delta) <= maxStep) {
-            u.laneOffset = desiredLane;
-          } else {
-            u.laneOffset += Math.sign(delta) * maxStep;
+          const deadzone = u.role === 'heavy' ? 0.02 : 0.04;
+          if (Math.abs(delta) > deadzone) {
+            const maxStep = maxLatSpeed * dt;
+            if (Math.abs(delta) <= maxStep) {
+              u.laneOffset = desiredLane;
+            } else {
+              u.laneOffset += Math.sign(delta) * maxStep;
+            }
+            u.laneOffset = Math.max(-0.88, Math.min(0.88, u.laneOffset));
           }
-          u.laneOffset = Math.max(-0.88, Math.min(0.88, u.laneOffset));
         }
       } else if (u.role === 'heavy') {
-        // Enemy Siege Walker strides BEHIND the enemy tower, then curves smoothly onto -0.16 spine
+        // Enemy Siege Walker strides BEHIND the enemy tower, then curves smoothly onto its assigned lane
         if (u.x > ENEMY_BASE_X - GIANT_BEHIND_BASE_CLEARANCE) {
           u.laneOffset = GIANT_BEHIND_BASE_LANE;
           u.targetLaneOffset = GIANT_BEHIND_BASE_LANE;
         } else {
-          const desiredLane = -0.16;
+          const desiredLane = Math.max(
+            GIANT_LANE_MIN,
+            Math.min(GIANT_LANE_MAX, u.preferredLane)
+          );
           u.targetLaneOffset = desiredLane;
           const delta = desiredLane - u.laneOffset;
-          const maxStep = 0.56 * dt;
+          const maxStep = 0.58 * dt;
           if (Math.abs(delta) <= maxStep) {
             u.laneOffset = desiredLane;
           } else {
@@ -647,28 +912,70 @@ export function stepBattle(
     }
   }
 
-  // 4. Projectiles (piercing arrows slice through multiple enemy grunts in flight)
+  // 3b. Lightweight 2D soft-separation between same-faction Giants so they never fuse into one silhouette
+  applyGiantSoftSeparation(state, dt);
+
+  // 4. Projectiles (narrow-corridor 2D segment-sweep deep-piercing arrows slice reliably in any direction)
+  const ARROW_HIT_X = 11;
+  const ARROW_HIT_LANE = 0.28;
+  const ARROW_HIT_LANE_GIANT = 0.44;
+
   for (let i = state.projectiles.length - 1; i >= 0; i--) {
     const p = state.projectiles[i];
+    const prevT = Math.min(1, p.progress);
+    const prevX = p.startX + (p.targetX - p.startX) * prevT;
+    const prevY = p.yOffset + (p.targetYOffset - p.yOffset) * prevT;
+
     p.progress += dt / p.duration;
-    p.x = p.startX + (p.targetX - p.startX) * Math.min(1, p.progress);
+    const t = Math.min(1, p.progress);
+    p.x = p.startX + (p.targetX - p.startX) * t;
+    const curY = p.yOffset + (p.targetYOffset - p.yOffset) * t;
 
     if (p.faction === 'ally' && p.pierceRemaining > 0) {
-      const candidates = state.units
-        .filter(
-          (u) =>
-            u.faction === 'enemy' &&
-            u.state !== 'die' &&
-            !p.hitUnitIds.includes(u.id) &&
-            Math.abs(u.x - p.x) <= 13
-        )
-        .sort((a, b) => Math.abs(a.x - p.x) - Math.abs(b.x - p.x));
+      const segDx = p.x - prevX;
+      const segDy = curY - prevY;
+      const scoredHits: Array<{ unit: BattleUnit; along: number; distSq: number }> = [];
 
-      for (const hit of candidates) {
+      for (const u of state.units) {
+        if (u.faction !== 'enemy' || u.state === 'die' || p.hitUnitIds.includes(u.id)) {
+          continue;
+        }
+        const laneTol = u.role === 'heavy' ? ARROW_HIT_LANE_GIANT : ARROW_HIT_LANE;
+        const sxN = segDx / ARROW_HIT_X;
+        const syN = segDy / laneTol;
+        const segLenSq = sxN * sxN + syN * syN;
+        const uProj =
+          segLenSq > 1e-6
+            ? Math.max(
+                0,
+                Math.min(
+                  1,
+                  (((u.x - prevX) / ARROW_HIT_X) * sxN + ((u.laneOffset - prevY) / laneTol) * syN) /
+                    segLenSq
+                )
+              )
+            : 1;
+        const closestX = prevX + segDx * uProj;
+        const closestY = prevY + segDy * uProj;
+        const nx = (u.x - closestX) / ARROW_HIT_X;
+        const ny = (u.laneOffset - closestY) / laneTol;
+        const distSq = nx * nx + ny * ny;
+        if (distSq <= 1.0) {
+          scoredHits.push({ unit: u, along: uProj, distSq });
+        }
+      }
+
+      // Hit enemies in strict order along the arrow's actual 2D flight segment
+      scoredHits.sort((a, b) => a.along - b.along || a.distSq - b.distSq);
+
+      for (const { unit: hit } of scoredHits) {
         if (p.pierceRemaining <= 0) break;
+        const hitOrder = p.hitUnitIds.length;
         p.hitUnitIds.push(hit.id);
-        const isFirst = p.hitUnitIds.length === 1;
-        const hitDmg = isFirst ? p.dmg : Math.max(1, Math.round(p.dmg * 0.78));
+        const isFirst = hitOrder === 0;
+        // Progressive 15% per-rank pierce falloff (100% -> 85% -> 72% -> 61% -> 52%)
+        const falloff = Math.pow(0.85, hitOrder);
+        const hitDmg = Math.max(1, Math.round(p.dmg * falloff));
         damageUnit(state, hit, hitDmg, isFirst, onSound);
         if (isFirst) {
           emitUnitCollision(
@@ -681,9 +988,12 @@ export function stepBattle(
             hit.role,
             0.35
           );
+        } else {
+          // Subtle golden pierce spark showing the arrow tore cleanly into deeper ranks
+          emitBurst(state, hit.x, hit.laneOffset, '#E9BA58', 3);
         }
         if (!hit.knockbackImmune) {
-          hit.x = Math.min(ENEMY_BASE_X - 16, hit.x + 2.2);
+          hit.x = Math.min(ENEMY_BASE_X - 16, hit.x + (isFirst ? 2.4 : 1.5));
         }
         p.pierceRemaining -= 1;
       }
@@ -697,13 +1007,17 @@ export function stepBattle(
     if (p.progress >= 1) {
       if (p.faction === 'enemy') {
         let hitTarget: BattleUnit | null = null;
-        let minDx = 20;
+        let minScore = 24;
         for (const u of state.units) {
           if (u.faction === p.faction || u.state === 'die') continue;
-          const d = Math.abs(u.x - p.targetX);
-          if (d < minDx) {
-            minDx = d;
-            hitTarget = u;
+          const dx = Math.abs(u.x - p.targetX);
+          const dy = Math.abs(u.laneOffset - p.targetYOffset);
+          if (dx <= 18 && dy <= 0.55) {
+            const score = dx + dy * 14;
+            if (score < minScore) {
+              minScore = score;
+              hitTarget = u;
+            }
           }
         }
         if (hitTarget) {
@@ -767,6 +1081,12 @@ export function stepBattle(
     state.endBeatTimer = 0.95;
     state.incomingHugeWave = null;
     state.activeHugeWaveBanner = null;
+    const defeatCoins = Math.max(
+      8,
+      Math.round(state.stage.victoryBonusCoins * 0.35 * getTimelineCoinMult(state.timeline))
+    );
+    state.coins += defeatCoins;
+    state.coinsEarnedThisRun += defeatCoins;
     state.cameraTrauma = 0;
     emitBurst(state, ALLY_BASE_X + 8, 0, '#A4423C', 20);
     emitBurst(state, ALLY_BASE_X + 6, -0.2, '#4A3A32', 14);
@@ -774,161 +1094,215 @@ export function stepBattle(
   }
 }
 
-/**
- * Organic Anti-Flicker Squad Steering for Royal Vanguard allies:
- * - Giant (heavy): steady mid-back regal corridor (-0.16 ± 0.08) so Giants stride majestically
- *   behind brawling footmen without obscuring them.
- * - Ranged (Royal Longbow): holds personal staggered 3-lane volley formation, making only gentle
- *   local adjustments toward enemies along its firing corridor.
- * - Melee (Oathblade): evaluates nearby enemy clusters with Slot Saturation (penalizing clusters
- *   already claimed by other allies) + Hysteresis (preventing synchronized army-wide flips).
- * - Clear field (Final Charge): converges cleanly to center lane (Giants hold -0.16).
- */
-function computeAllyDesiredLane(state: BattleState, ally: BattleUnit): number {
-  // 1. Giants hold the regal mid-back road spine so they never jitter or hide footmen
-  if (ally.role === 'heavy') {
-    const enemyGiant = state.units.find(
-      (e) => e.faction === 'enemy' && e.role === 'heavy' && e.state !== 'die'
-    );
-    if (enemyGiant) {
-      return Math.max(-0.24, Math.min(-0.08, enemyGiant.laneOffset));
-    }
-    return -0.16;
-  }
+function applyGiantSoftSeparation(state: BattleState, dt: number): void {
+  const MIN_DX = 26;
+  const MIN_DY = 0.4;
+  const factions: Faction[] = ['ally', 'enemy'];
 
-  const vision = ally.role === 'ranged' ? 240 : 155;
-  let enemies = state.units.filter(
+  for (const faction of factions) {
+    const giants = state.units.filter(
+      (u) =>
+        u.faction === faction &&
+        u.role === 'heavy' &&
+        u.state !== 'die' &&
+        (faction === 'ally'
+          ? u.x >= ALLY_BASE_X + GIANT_BEHIND_BASE_CLEARANCE
+          : u.x <= ENEMY_BASE_X - GIANT_BEHIND_BASE_CLEARANCE)
+    );
+    if (giants.length < 2) continue;
+
+    const dir = faction === 'ally' ? 1 : -1;
+    const oppBaseEdge = faction === 'ally' ? ENEMY_BASE_X - 18 : ALLY_BASE_X + 18;
+
+    for (let i = 0; i < giants.length; i++) {
+      for (let j = i + 1; j < giants.length; j++) {
+        const a = giants[i];
+        const b = giants[j];
+        const dx = a.x - b.x;
+        const dy = a.laneOffset - b.laneOffset;
+        const nx = dx / MIN_DX;
+        const ny = dy / MIN_DY;
+        const dist = Math.hypot(nx, ny);
+        if (dist >= 1) continue;
+
+        const overlap = 1 - dist;
+        const sepDirY =
+          Math.abs(dy) >= 0.03
+            ? Math.sign(dy)
+            : Math.abs(a.preferredLane - b.preferredLane) >= 0.05
+              ? Math.sign(a.preferredLane - b.preferredLane)
+              : a.id < b.id
+                ? -1
+                : 1;
+
+        // Primary separation along road depth (Y) keeps Giants side-by-side in crisp 2.5D layering
+        const pushY = sepDirY * (0.42 + overlap * 0.95) * dt;
+        a.laneOffset = Math.max(GIANT_LANE_MIN, Math.min(GIANT_LANE_MAX, a.laneOffset + pushY));
+        b.laneOffset = Math.max(GIANT_LANE_MIN, Math.min(GIANT_LANE_MAX, b.laneOffset - pushY));
+
+        // Secondary gentle X stagger (especially helpful when 4+ Giants crowd all 3 depth lanes)
+        const sepDirX = Math.abs(dx) >= 1 ? Math.sign(dx) : a.id < b.id ? dir : -dir;
+        const pushX = sepDirX * (6 + overlap * 14) * dt;
+
+        const nudgeGiantX = (g: BattleUnit, deltaX: number) => {
+          let nextX = Math.max(ALLY_BASE_X + 18, Math.min(ENEMY_BASE_X - 18, g.x + deltaX));
+          // Prevent soft-separation from pushing a castle-sieging Giant back out of attack range
+          if (g.state === 'attack') {
+            const wasInBaseRange = (oppBaseEdge - g.x) * dir <= g.range;
+            if (wasInBaseRange) {
+              const maxRetreatDist = g.range - 2;
+              if ((oppBaseEdge - nextX) * dir > maxRetreatDist) {
+                nextX = oppBaseEdge - dir * maxRetreatDist;
+              }
+            }
+          }
+          g.x = nextX;
+        };
+
+        nudgeGiantX(a, pushX);
+        nudgeGiantX(b, -pushX);
+      }
+    }
+  }
+}
+
+function isInMeleeLaneReach(attacker: BattleUnit, target: BattleUnit): boolean {
+  if (attacker.role !== 'melee') return true;
+  const maxLaneDiff =
+    attacker.faction === 'ally'
+      ? target.role === 'heavy'
+        ? 0.48
+        : 0.34
+      : 0.55;
+  return Math.abs(target.laneOffset - attacker.laneOffset) <= maxLaneDiff;
+}
+
+/**
+ * Selects ONE castle-threatening enemy for an ally melee soldier to lock onto while marching.
+ * Balances castle-defense urgency (smallest x) with load balancing across teammates and local lane comfort,
+ * eliminating per-frame cluster re-scoring and vertical flickering.
+ */
+function acquireAllyMarchTarget(state: BattleState, ally: BattleUnit): BattleUnit | null {
+  let candidates = state.units.filter(
     (e) =>
       e.faction === 'enemy' &&
       e.state !== 'die' &&
-      e.x - ally.x >= -16 &&
-      e.x - ally.x <= vision
+      e.x - ally.x >= -48 &&
+      e.x - ally.x <= 210
   );
-
-  if (enemies.length === 0) {
-    enemies = state.units.filter((e) => e.faction === 'enemy' && e.state !== 'die');
+  if (candidates.length === 0) {
+    candidates = state.units.filter((e) => e.faction === 'enemy' && e.state !== 'die');
   }
+  if (candidates.length === 0) return null;
 
-  // Clear field -> converge smoothly on enemy base doorway center
-  if (enemies.length === 0) {
-    return 0;
-  }
-
-  let bestLane = ally.targetLaneOffset;
-
-  if (ally.role === 'ranged') {
-    // Ranged stays anchored near its personal staggered lane, adjusting only gently toward dense lines
-    let bestScore = -Infinity;
-    for (let step = -4; step <= 4; step++) {
-      const candidate = step * 0.2;
-      let score = 0;
-      for (const e of enemies) {
-        const dy = Math.abs(e.laneOffset - candidate);
-        if (dy <= 0.36) {
-          const roleWeight = e.role === 'heavy' ? 1.8 : 1.0;
-          score += roleWeight * (1 - dy / 0.45);
-        }
-      }
-      // Strong anchor to personal volley lane + smooth hysteresis to current target
-      score -= Math.abs(candidate - ally.preferredLane) * 0.65;
-      score -= Math.abs(candidate - ally.targetLaneOffset) * 0.25;
-      if (score > bestScore) {
-        bestScore = score;
-        bestLane = candidate;
-      }
-    }
-  } else {
-    // Melee: cluster density divided by ally slot saturation + hysteresis so squads split organically
-    const scoreLaneAt = (lane: number, anchorX: number): number => {
-      let clusterScore = 0;
-      for (const other of enemies) {
-        const dx = Math.abs(other.x - anchorX);
-        const dy = Math.abs(other.laneOffset - lane);
-        if (dx <= 44 && dy <= 0.52) {
-          const baseWeight = other.role === 'heavy' ? 2.4 : 1.0;
-          const distFactor = 1.35 / (1 + Math.max(0, other.x - ally.x) / 95);
-          clusterScore += baseWeight * distFactor;
-        }
-      }
-      if (clusterScore <= 0) return 0;
-
-      // Slot Saturation: penalize lanes already claimed by nearby allied melee units
-      let committedMates = 0;
-      for (const mate of state.units) {
-        if (
-          mate.id === ally.id ||
-          mate.faction !== 'ally' ||
-          mate.role !== 'melee' ||
-          mate.state === 'die'
-        ) {
-          continue;
-        }
-        if (
-          Math.abs(mate.targetLaneOffset - lane) < 0.34 &&
-          Math.abs(mate.x - ally.x) < 90
-        ) {
-          committedMates += 1;
-        }
-      }
-
-      const saturated = clusterScore / (1 + committedMates * 0.85);
-      // Mild personal preference keeps tie-breaks organic
-      const personalBias = Math.abs(lane - ally.preferredLane) * 0.14;
-      return saturated - personalBias;
-    };
-
-    let bestScore = -Infinity;
-    let candidateLane = ally.targetLaneOffset;
-
-    for (const anchor of enemies) {
-      let weightedLaneSum = 0;
-      let weightTotal = 0;
-      for (const other of enemies) {
-        const dx = Math.abs(other.x - anchor.x);
-        const dy = Math.abs(other.laneOffset - anchor.laneOffset);
-        if (dx <= 44 && dy <= 0.52) {
-          const w = other.role === 'heavy' ? 2.4 : 1.0;
-          weightedLaneSum += other.laneOffset * w;
-          weightTotal += w;
-        }
-      }
-      if (weightTotal <= 0) continue;
-      const laneCenter = weightedLaneSum / weightTotal;
-      const sc = scoreLaneAt(laneCenter, anchor.x);
-      if (sc > bestScore) {
-        bestScore = sc;
-        candidateLane = laneCenter;
-      }
-    }
-
-    // Hysteresis: keep current targetLaneOffset unless new cluster clearly outperforms it
-    const nearestOnCurrent = enemies.find(
-      (e) => Math.abs(e.laneOffset - ally.targetLaneOffset) <= 0.48
-    );
-    const currentScore = nearestOnCurrent
-      ? scoreLaneAt(ally.targetLaneOffset, nearestOnCurrent.x)
-      : -1;
-    bestLane =
-      bestScore > currentScore + 0.32 || currentScore <= 0
-        ? candidateLane
-        : ally.targetLaneOffset;
-  }
-
-  // Gentle vertical separation from immediately adjacent allies
-  let sepNudge = 0;
+  // Map enemyId -> count of other ally melee units already locked onto it
+  const lockerCounts = new Map<number, number>();
+  const lockedEnemyRefs: BattleUnit[] = [];
   for (const mate of state.units) {
-    if (mate.id === ally.id || mate.faction !== 'ally' || mate.state === 'die') continue;
-    if (mate.role === 'heavy') continue;
-    if (Math.abs(mate.x - ally.x) < 16) {
-      const dy = ally.laneOffset - mate.laneOffset;
-      if (Math.abs(dy) < 0.24) {
-        const pushDir = dy === 0 ? (ally.id % 2 === 0 ? 1 : -1) : Math.sign(dy);
-        sepNudge += pushDir * 0.11;
+    if (
+      mate.id === ally.id ||
+      mate.faction !== 'ally' ||
+      mate.role !== 'melee' ||
+      mate.state === 'die' ||
+      mate.lockedTargetId == null
+    ) {
+      continue;
+    }
+    lockerCounts.set(mate.lockedTargetId, (lockerCounts.get(mate.lockedTargetId) ?? 0) + 1);
+    const mateTarget = candidates.find((c) => c.id === mate.lockedTargetId);
+    if (mateTarget) lockedEnemyRefs.push(mateTarget);
+  }
+
+  let best: BattleUnit | null = null;
+  let bestScore = Infinity;
+
+  for (const enemy of candidates) {
+    const directLockers = lockerCounts.get(enemy.id) ?? 0;
+    let flankLockers = 0;
+    for (const ref of lockedEnemyRefs) {
+      if (
+        ref.id !== enemy.id &&
+        Math.abs(ref.laneOffset - enemy.laneOffset) < 0.35 &&
+        Math.abs(ref.x - enemy.x) < 42
+      ) {
+        flankLockers += 1;
       }
+    }
+
+    const castleThreat = enemy.x;
+    const lockerPenalty =
+      directLockers * (enemy.role === 'heavy' ? 22 : 52) + flankLockers * 18;
+    const laneCost =
+      Math.abs(enemy.laneOffset - ally.laneOffset) * 26 +
+      Math.abs(enemy.laneOffset - ally.preferredLane) * 8;
+    const forwardDist = Math.max(0, enemy.x - ally.x) * 0.22;
+    const score = castleThreat + lockerPenalty + laneCost + forwardDist;
+
+    if (score < bestScore) {
+      bestScore = score;
+      best = enemy;
     }
   }
 
-  return Math.max(-0.85, Math.min(0.85, bestLane + Math.max(-0.2, Math.min(0.2, sepNudge))));
+  return best;
+}
+
+/**
+ * Rock-Steady Squad Lane Steering for Royal Vanguard allies (zero per-frame rescoring or sepNudge jitter):
+ * - Giant (heavy): holds its individually assigned staggered depth corridor.
+ * - Melee (Oathblade): marches in a straight diagonal line toward its march-locked enemy until killed,
+ *   or advances along its calm personal vanguard lane when the road is clear.
+ * - Ranged (Royal Longbow): holds its staggered 3-lane volley corridor with only a subtle, continuous
+ *   drift (±0.16) toward the enemy front line (piercing arrows already aim accurately in full 2D).
+ */
+function computeAllyDesiredLane(
+  state: BattleState,
+  ally: BattleUnit,
+  marchLockedUnit?: BattleUnit | null
+): number {
+  // 1. Giants hold their individually assigned staggered corridor so they never stack or jitter
+  if (ally.role === 'heavy') {
+    return Math.max(GIANT_LANE_MIN, Math.min(GIANT_LANE_MAX, ally.preferredLane));
+  }
+
+  // 2. Melee follows its single locked target smoothly (with tiny per-unit fight slot so mates fan out cleanly)
+  if (ally.role === 'melee') {
+    const locked =
+      marchLockedUnit ??
+      (ally.lockedTargetId != null
+        ? state.units.find(
+            (e) => e.id === ally.lockedTargetId && e.faction === 'enemy' && e.state !== 'die'
+          ) ?? null
+        : null);
+    if (locked) {
+      const fightSlot = ((ally.id % 3) - 1) * 0.09;
+      return Math.max(-0.85, Math.min(0.85, locked.laneOffset + fightSlot));
+    }
+    return state.finalChargeActive ? 0 : Math.max(-0.6, Math.min(0.6, ally.preferredLane * 0.45));
+  }
+
+  // 3. Ranged stays anchored to its personal 3-lane volley corridor with gentle continuous bias
+  const nearbyEnemies = state.units.filter(
+    (e) =>
+      e.faction === 'enemy' &&
+      e.state !== 'die' &&
+      e.x - ally.x >= -36 &&
+      e.x - ally.x <= 240
+  );
+  if (nearbyEnemies.length === 0) {
+    return Math.max(-0.65, Math.min(0.65, ally.preferredLane * 0.65));
+  }
+
+  let weightedLane = 0;
+  let totalWeight = 0;
+  for (const e of nearbyEnemies) {
+    const w = e.role === 'heavy' ? 1.8 : 1.0;
+    weightedLane += e.laneOffset * w;
+    totalWeight += w;
+  }
+  const avgEnemyLane = totalWeight > 0 ? weightedLane / totalWeight : ally.preferredLane;
+  const drift = Math.max(-0.18, Math.min(0.18, (avgEnemyLane - ally.preferredLane) * 0.35));
+  return Math.max(-0.82, Math.min(0.82, ally.preferredLane + drift));
 }
 
 function stepEnemyWaves(
@@ -971,18 +1345,60 @@ function stepEnemyWaves(
     }
   }
 
-  if (state.waveCursor < waves.length && state.waveScriptDuration > 0) {
-    state.waveProgress = Math.min(1, state.time / state.waveScriptDuration);
-  } else {
-    state.waveProgress = 1;
-  }
-
   // Stop spawning permanently once all scripted waves (including Huge Wave 3) are deployed
   if (state.waveCursor < waves.length) {
-    state.waveTimer -= dt;
+    const upcoming = waves[state.waveCursor];
+    const inHugeWarningWindow = Boolean(
+      upcoming.hugeWaveIndex && state.waveTimer > 0 && state.waveTimer <= HUGE_WAVE_WARNING_SECONDS
+    );
+
+    // Plan B dynamic pacing:
+    // 1. Wait until current wave finishes exiting the enemy gate (pendingSpawns empty) before ticking next wave
+    // 2. Keep the 3.5s Huge Wave warning countdown & initial opening grace period at steady 1.0x
+    // 3. Slow down under heavy enemy pressure (0.4x / 0.7x) to prevent double-wave pileups,
+    //    and fast-forward (2.2x) when the player clears the field so there is no awkward dead air
+    let paceMult = 1.0;
+    if (state.pendingSpawns.length > 0) {
+      paceMult = 0;
+    } else if (!inHugeWarningWindow && state.waveCursor > 0) {
+      let livingEnemies = 0;
+      let enemyPressure = 0;
+      for (const u of state.units) {
+        if (u.faction === 'enemy' && u.state !== 'die') {
+          livingEnemies += 1;
+          enemyPressure += u.role === 'heavy' ? 3 : 1;
+        }
+      }
+      if (livingEnemies === 0) {
+        paceMult = 2.2;
+      } else if (enemyPressure >= 6) {
+        paceMult = 0.4;
+      } else if (enemyPressure >= 3) {
+        paceMult = 0.7;
+      }
+    }
+
+    if (paceMult > 0) {
+      state.waveTimer -= dt * paceMult;
+    }
+
+    // Keep wave progress bar mathematically synchronized with the 3 Huge Wave flags
+    if (state.waveScriptDuration > 0) {
+      let completedDelay = 0;
+      for (let i = 0; i < state.waveCursor; i++) {
+        completedDelay += waves[i].delay;
+      }
+      const currentDelay = Math.max(0.01, upcoming.delay);
+      const currentElapsed = Math.max(0, currentDelay - Math.max(0, state.waveTimer));
+      state.waveProgress = Math.min(
+        1,
+        (completedDelay + currentElapsed) / state.waveScriptDuration
+      );
+    } else {
+      state.waveProgress = 1;
+    }
 
     // 3.5s pre-wave warning countdown: darkening sky + crimson heartbeat vignette + enemy composition preview
-    const upcoming = waves[state.waveCursor];
     if (upcoming.hugeWaveIndex && state.waveTimer > 0 && state.waveTimer <= HUGE_WAVE_WARNING_SECONDS) {
       const composition = getWaveComposition(upcoming);
       const urgency = 1 - Math.max(0, state.waveTimer / HUGE_WAVE_WARNING_SECONDS);
@@ -1197,15 +1613,36 @@ function applyUnitHit(
   let extraHits = 0;
   if (attacker.splashRadius > 0) {
     const maxExtra = Math.max(0, attacker.cleaveCount - 1);
+    // Melee knights cleave a realistic local 2D pocket around the blade (not across the entire road width);
+    // Colossal Giants keep full-width seismic ground slams.
+    const MELEE_CLEAVE_LANE_RADIUS = 0.42;
+
     const cleaveTargets = state.units
-      .filter(
-        (other) =>
-          other.id !== primaryTarget.id &&
-          other.faction !== attacker.faction &&
-          other.state !== 'die' &&
-          Math.abs(other.x - primaryTarget.x) <= attacker.splashRadius
-      )
-      .sort((a, b) => Math.abs(a.x - primaryTarget.x) - Math.abs(b.x - primaryTarget.x));
+      .filter((other) => {
+        if (
+          other.id === primaryTarget.id ||
+          other.faction === attacker.faction ||
+          other.state === 'die'
+        ) {
+          return false;
+        }
+        if (isGiant) {
+          return Math.abs(other.x - primaryTarget.x) <= attacker.splashRadius;
+        }
+        const nx = (other.x - primaryTarget.x) / attacker.splashRadius;
+        const ny = (other.laneOffset - primaryTarget.laneOffset) / MELEE_CLEAVE_LANE_RADIUS;
+        return nx * nx + ny * ny <= 1.0;
+      })
+      .sort((a, b) => {
+        if (isGiant) {
+          return Math.abs(a.x - primaryTarget.x) - Math.abs(b.x - primaryTarget.x);
+        }
+        const ax = (a.x - primaryTarget.x) / attacker.splashRadius;
+        const ay = (a.laneOffset - primaryTarget.laneOffset) / MELEE_CLEAVE_LANE_RADIUS;
+        const bx = (b.x - primaryTarget.x) / attacker.splashRadius;
+        const by = (b.laneOffset - primaryTarget.laneOffset) / MELEE_CLEAVE_LANE_RADIUS;
+        return ax * ax + ay * ay - (bx * bx + by * by);
+      });
 
     const limit = maxExtra > 0 ? maxExtra : cleaveTargets.length;
     const cleaveDmg = Math.max(
@@ -1260,6 +1697,14 @@ function getDamageReduction(state: BattleState, target: BattleUnit): number {
   return Math.min(0.6, reduction);
 }
 
+function triggerEnemyCombatStop(target: BattleUnit): void {
+  if (target.faction !== 'enemy' || target.state === 'die') return;
+  if ((target.engageTimer ?? 0) <= 0 && !target.engaged) {
+    target.aggroAlertTimer = 0.45;
+  }
+  target.engageTimer = 1.8;
+}
+
 function damageUnit(
   state: BattleState,
   target: BattleUnit,
@@ -1275,6 +1720,9 @@ function damageUnit(
 
   target.hp -= dmg;
   target.hitFlashTimer = 0.08;
+  if (target.faction === 'enemy' && target.hp > 0) {
+    triggerEnemyCombatStop(target);
+  }
   emitCallout(state, target.x, target.laneOffset, `-${dmg}`, isHeavy ? 'crit' : 'damage');
   emitBurst(
     state,
@@ -1342,6 +1790,7 @@ function applyBaseHit(
     }
   } else {
     state.allyBaseHp = Math.max(0, state.allyBaseHp - dmg);
+    state.allyBaseDamageTaken += dmg;
     state.allyBaseHitFlash = 0.11;
     emitCallout(state, ALLY_BASE_X + 12, -0.2, `-${dmg}`, isGiant ? 'crit' : 'damage');
     emitBurst(state, ALLY_BASE_X + 14, 0, '#A4423C', isGiant ? 12 : 4);

@@ -329,67 +329,58 @@ test('seedTitleShowcase populates a 3 Royal Vanguard vs 7 Hearthclan Grunt clash
   assert.equal(state.unitsDeployed, 0);
 });
 
-test('selectBattleCg picks all 3 victory and 3 defeat CGs based on battle context', () => {
+test('selectBattleCg picks all 3 victory and 3 defeat CGs based on castle HP loss tiers', () => {
+  // Victory CG III: full HP (no damage taken)
   assert.equal(
     selectBattleCg('victory', {
-      stageChapter: 1,
-      allyAgeIndex: 0,
-      unitsDeployed: 6,
+      allyBaseHpRatio: 1,
+      allyBaseDamageTaken: 0,
       enemyBaseHpRatio: 0,
-      clearTime: 18,
-    }).id,
-    'victory_banner_dawn'
-  );
-  assert.equal(
-    selectBattleCg('victory', {
-      stageChapter: 2,
-      allyAgeIndex: 1,
-      unitsDeployed: 10,
-      enemyBaseHpRatio: 0,
-      clearTime: 24,
-    }).id,
-    'victory_swarm_surge'
-  );
-  assert.equal(
-    selectBattleCg('victory', {
-      stageChapter: 5,
-      allyAgeIndex: 4,
-      unitsDeployed: 12,
-      enemyBaseHpRatio: 0,
-      clearTime: 30,
     }).id,
     'victory_astral_crown'
   );
+  // Victory CG II: 1%–40% ally castle HP lost (or healed back after taking damage)
+  assert.equal(
+    selectBattleCg('victory', {
+      allyBaseHpRatio: 0.6,
+      allyBaseDamageTaken: 160,
+      enemyBaseHpRatio: 0,
+    }).id,
+    'victory_swarm_surge'
+  );
+  // Victory CG I: >40% ally castle HP lost
+  assert.equal(
+    selectBattleCg('victory', {
+      allyBaseHpRatio: 0.45,
+      allyBaseDamageTaken: 220,
+      enemyBaseHpRatio: 0,
+    }).id,
+    'victory_banner_dawn'
+  );
 
+  // Defeat CG III (most devastating): enemy tower untouched at 100% HP
   assert.equal(
     selectBattleCg('defeat', {
-      stageChapter: 1,
-      allyAgeIndex: 0,
-      unitsDeployed: 3,
-      enemyBaseHpRatio: 0.72,
-      clearTime: 20,
+      allyBaseHpRatio: 0,
+      enemyBaseHpRatio: 1,
+    }).id,
+    'defeat_siege_eclipse'
+  );
+  // Defeat CG I (moderate retreat): enemy tower lost 1%–40% HP
+  assert.equal(
+    selectBattleCg('defeat', {
+      allyBaseHpRatio: 0,
+      enemyBaseHpRatio: 0.65,
     }).id,
     'defeat_rain_retreat'
   );
+  // Defeat CG II (lightest/narrowest defeat): enemy tower lost >40% HP
   assert.equal(
     selectBattleCg('defeat', {
-      stageChapter: 2,
-      allyAgeIndex: 0,
-      unitsDeployed: 6,
-      enemyBaseHpRatio: 0.18,
-      clearTime: 28,
+      allyBaseHpRatio: 0,
+      enemyBaseHpRatio: 0.42,
     }).id,
     'defeat_inches_short'
-  );
-  assert.equal(
-    selectBattleCg('defeat', {
-      stageChapter: 4,
-      allyAgeIndex: 2,
-      unitsDeployed: 8,
-      enemyBaseHpRatio: 0.65,
-      clearTime: 44,
-    }).id,
-    'defeat_siege_eclipse'
   );
 });
 
@@ -482,7 +473,7 @@ test('PvZ 3-wave progress bar triggers 3.5s W1 tremors, war-drums, T2 scout coun
   let peakTremor = 0;
   let sawWave1Comp: { melee: number; ranged: number; heavy: number } | null = null;
   let sawWave2Comp: { melee: number; ranged: number; heavy: number } | null = null;
-  for (let i = 0; i < 1500 && state.phase === 'playing'; i++) {
+  for (let i = 0; i < 4500 && state.phase === 'playing'; i++) {
     stepBattle(state, 0.05, (ev) => events.push(ev));
     peakTension = Math.max(peakTension, state.waveTensionLevel);
     peakTremor = Math.max(peakTremor, state.tremorPulse);
@@ -552,7 +543,7 @@ test('C1 stops all enemy spawns after Wave 3 and activates Final Charge (+80% sp
   state.enemyBaseMaxHp = 5000;
 
   // Run until Wave 3 has finished deploying and all pending spawns are flushed
-  for (let i = 0; i < 1600 && !(state.allWavesDeployed && state.pendingSpawns.length === 0); i++) {
+  for (let i = 0; i < 4500 && !(state.allWavesDeployed && state.pendingSpawns.length === 0); i++) {
     stepBattle(state, 0.05, (ev) => events.push(ev));
   }
   assert.equal(state.allWavesDeployed, true, 'all 3 waves deployed');
@@ -735,11 +726,11 @@ test('victory sets 0.95s golden dawnbreak beat and clears storm tension immediat
   assert.equal(state.waveTensionLevel, 0);
 });
 
-test('all 6 battle chronicle CGs define achievement metadata and positive coin bounties', () => {
+test('all 6 battle chronicle CGs define achievement metadata with zero achievement coin bounties', () => {
   assert.equal(BATTLE_CGS.length, 6);
   for (const cg of BATTLE_CGS) {
     assert.ok(cg.achievementName.trim().length > 0, `${cg.id} has achievementName`);
-    assert.ok(cg.rewardCoins >= 15, `${cg.id} grants positive coin bounty`);
+    assert.equal(cg.rewardCoins, 0, `${cg.id} does not grant separate achievement coin bounty`);
     assert.ok(cg.triggerRule.trim().length > 0, `${cg.id} has unlock condition`);
   }
 });

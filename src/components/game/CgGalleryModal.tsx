@@ -7,14 +7,12 @@ import {
   type CgOutcome,
 } from '../../game/cgCatalog';
 import type { SaveData } from '../../game/types';
-import { FlorinCoinIcon } from './GameIcons';
 import {
   Award,
   CheckCircle2,
   Flame,
   Lock,
   Maximize2,
-  Sparkles,
   Trophy,
   X,
 } from 'lucide-react';
@@ -30,13 +28,11 @@ export function CgGalleryModal({
   save,
   initialTab = 'victory',
   initialCgId,
-  onClaimReward,
   onClose,
 }: {
   save: SaveData;
   initialTab?: CgOutcome;
   initialCgId?: string;
-  onClaimReward: (cgId: string, rewardCoins: number) => void;
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<CgOutcome>(initialTab);
@@ -49,16 +45,9 @@ export function CgGalleryModal({
   const list = tab === 'victory' ? VICTORY_CGS : DEFEAT_CGS;
   const totalCount = BATTLE_CGS.length;
   const unlockedCount = save.unlockedCgIds.length;
-  const claimedCount = save.claimedAchievementIds.length;
 
   const victoryUnlocked = VICTORY_CGS.filter((c) => save.unlockedCgIds.includes(c.id)).length;
   const defeatUnlocked = DEFEAT_CGS.filter((c) => save.unlockedCgIds.includes(c.id)).length;
-  const victoryHasUnclaimed = VICTORY_CGS.some(
-    (c) => save.unlockedCgIds.includes(c.id) && !save.claimedAchievementIds.includes(c.id)
-  );
-  const defeatHasUnclaimed = DEFEAT_CGS.some(
-    (c) => save.unlockedCgIds.includes(c.id) && !save.claimedAchievementIds.includes(c.id)
-  );
 
   const progressPct = Math.round((unlockedCount / Math.max(1, totalCount)) * 100);
 
@@ -81,7 +70,7 @@ export function CgGalleryModal({
               </h2>
             </div>
             <p className="text-[11px] text-[#7D6A5C] mt-0.5">
-              {unlockedCount}/{totalCount} Unlocked · {claimedCount}/{totalCount} Rewards Claimed
+              {unlockedCount}/{totalCount} Chronicles Unlocked
             </p>
           </div>
           <button
@@ -120,12 +109,6 @@ export function CgGalleryModal({
           >
             <Award className="w-3.5 h-3.5 shrink-0" />
             <span>Victory ({victoryUnlocked}/3)</span>
-            {victoryHasUnclaimed && (
-              <span
-                className="w-2 h-2 rounded-full bg-[#F5C16C] border border-[#3A2B23]"
-                aria-label="Unclaimed victory reward"
-              />
-            )}
           </button>
           <button
             type="button"
@@ -138,12 +121,6 @@ export function CgGalleryModal({
           >
             <Flame className="w-3.5 h-3.5 shrink-0" />
             <span>Defeat ({defeatUnlocked}/3)</span>
-            {defeatHasUnclaimed && (
-              <span
-                className="w-2 h-2 rounded-full bg-[#F5C16C] border border-[#3A2B23]"
-                aria-label="Unclaimed defeat reward"
-              />
-            )}
           </button>
         </div>
 
@@ -151,7 +128,6 @@ export function CgGalleryModal({
         <div className="mt-2.5 overflow-y-auto space-y-2.5 pr-0.5">
           {list.map((cg) => {
             const unlocked = save.unlockedCgIds.includes(cg.id);
-            const claimed = save.claimedAchievementIds.includes(cg.id);
 
             return (
               <div
@@ -219,7 +195,7 @@ export function CgGalleryModal({
                   </div>
                 )}
 
-                {/* Bottom Details & Reward Claim Row */}
+                {/* Bottom Details */}
                 <div className="p-2.5 space-y-1.5">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
@@ -233,31 +209,10 @@ export function CgGalleryModal({
                       )}
                     </div>
 
-                    {/* Reward State: Claim Button (Unlocked & Unclaimed) / Claimed Stamp / Locked Bounty */}
-                    {unlocked ? (
-                      claimed ? (
-                        <span
-                          data-testid={`claimed-badge-${cg.id}`}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[#E1ECE8] border border-[#2E6F7E]/45 text-[#2E6F7E] text-[10.5px] font-extrabold shrink-0"
-                        >
-                          <CheckCircle2 className="w-3 h-3" />
-                          <span>Claimed</span>
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          data-testid={`claim-achievement-${cg.id}`}
-                          onClick={() => onClaimReward(cg.id, cg.rewardCoins)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border-2 border-[#3A2B23] bg-[#C98A2C] text-[#FFFDF7] text-[11px] font-extrabold font-mono-num shadow-[0_2px_0_#3A2B23] active:translate-y-0.5 cursor-pointer shrink-0"
-                        >
-                          <Sparkles className="w-3 h-3" />
-                          <span>Claim +{cg.rewardCoins}</span>
-                        </button>
-                      )
-                    ) : (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#F9F3E6] border border-[#3A2B23]/30 text-[10.5px] font-extrabold font-mono-num text-[#7D6A5C] shrink-0">
-                        <FlorinCoinIcon />
-                        <span>+{cg.rewardCoins}</span>
+                    {unlocked && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#E1ECE8] border border-[#2E6F7E]/45 text-[#2E6F7E] text-[10.5px] font-extrabold shrink-0">
+                        <CheckCircle2 className="w-3 h-3" />
+                        <span>Collected</span>
                       </span>
                     )}
                   </div>
@@ -329,17 +284,6 @@ export function CgGalleryModal({
                 <span className="font-extrabold text-[#3A2B23]">Unlock Condition: </span>
                 {focusedCg.triggerRule}
               </div>
-
-              {!save.claimedAchievementIds.includes(focusedCg.id) && (
-                <button
-                  type="button"
-                  onClick={() => onClaimReward(focusedCg.id, focusedCg.rewardCoins)}
-                  className="w-full py-2 px-3 rounded-xl border-2 border-[#3A2B23] bg-[#C98A2C] text-[#FFFDF7] text-xs font-extrabold flex items-center justify-center gap-1.5 shadow-[0_3px_0_#3A2B23] cursor-pointer"
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>Claim Achievement Reward (+{focusedCg.rewardCoins} Coins)</span>
-                </button>
-              )}
             </div>
           </div>
         </div>

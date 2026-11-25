@@ -121,6 +121,7 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
     coinsEarned: 0,
     allyBaseHp: battleRef.current.allyBaseHp,
     allyBaseMaxHp: battleRef.current.allyBaseMaxHp,
+    allyBaseDamageTaken: battleRef.current.allyBaseDamageTaken,
     enemyBaseHp: battleRef.current.enemyBaseHp,
     enemyBaseMaxHp: battleRef.current.enemyBaseMaxHp,
     clearTime: 0,
@@ -218,6 +219,7 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
       coinsEarned: b.coinsEarnedThisRun,
       allyBaseHp: Math.ceil(b.allyBaseHp),
       allyBaseMaxHp: b.allyBaseMaxHp,
+      allyBaseDamageTaken: b.allyBaseDamageTaken,
       enemyBaseHp: Math.ceil(b.enemyBaseHp),
       enemyBaseMaxHp: b.enemyBaseMaxHp,
       clearTime: Math.round(b.time),
@@ -243,11 +245,9 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
     (b: BattleState, won: boolean, outcomeResolved = false) => {
       const earnedCgId = outcomeResolved
         ? selectBattleCg(won ? 'victory' : 'defeat', {
-            stageChapter: b.stage.chapter,
-            allyAgeIndex: b.allyAgeIndex,
-            unitsDeployed: b.unitsDeployed,
+            allyBaseHpRatio: b.allyBaseHp / Math.max(1, b.allyBaseMaxHp),
+            allyBaseDamageTaken: b.allyBaseDamageTaken,
             enemyBaseHpRatio: b.enemyBaseHp / Math.max(1, b.enemyBaseMaxHp),
-            clearTime: Math.round(b.time),
           }).id
         : null;
 
@@ -522,6 +522,7 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
             coinsEarned: b.coinsEarnedThisRun,
             allyBaseHp: Math.ceil(b.allyBaseHp),
             allyBaseMaxHp: b.allyBaseMaxHp,
+            allyBaseDamageTaken: b.allyBaseDamageTaken,
             enemyBaseHp: Math.ceil(b.enemyBaseHp),
             enemyBaseMaxHp: b.enemyBaseMaxHp,
             clearTime: Math.round(b.time),
@@ -618,45 +619,16 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
   const activeResultCg =
     phase === 'victory' || phase === 'defeat'
       ? selectBattleCg(phase, {
-          stageChapter: currentStage.chapter,
-          allyAgeIndex: hud.allyAgeIndex,
-          unitsDeployed: hud.unitsDeployed,
+          allyBaseHpRatio: hud.allyBaseHp / Math.max(1, hud.allyBaseMaxHp),
+          allyBaseDamageTaken: hud.allyBaseDamageTaken,
           enemyBaseHpRatio: hud.enemyBaseHp / Math.max(1, hud.enemyBaseMaxHp),
-          clearTime: hud.clearTime,
         })
       : null;
-
-  const unclaimedAchievementCount = save.unlockedCgIds.filter(
-    (id) => !save.claimedAchievementIds.includes(id)
-  ).length;
 
   const openCgGallery = (tab: CgOutcome, focusId?: string) => {
     setCgGalleryTab(tab);
     setCgGalleryFocusId(focusId);
     setActiveSubModal('cgs');
-  };
-
-  const handleClaimAchievementReward = (cgId: string, rewardCoins: number) => {
-    const cur = saveRef.current;
-    if (!cur.unlockedCgIds.includes(cgId) || cur.claimedAchievementIds.includes(cgId)) {
-      return;
-    }
-    gameAudio.trigger('upgrade');
-    battleRef.current.coins += rewardCoins;
-    setSave((prev) => {
-      if (!prev.unlockedCgIds.includes(cgId) || prev.claimedAchievementIds.includes(cgId)) {
-        return prev;
-      }
-      return {
-        ...prev,
-        coins: prev.coins + rewardCoins,
-        claimedAchievementIds: [...prev.claimedAchievementIds, cgId],
-      };
-    });
-    setHud((prev) => ({
-      ...prev,
-      coins: prev.coins + rewardCoins,
-    }));
   };
 
   const handleAdvanceTimeline = () => {
@@ -837,15 +809,6 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
                 >
                   <Trophy className="w-3.5 h-3.5 text-[#C98A2C] shrink-0" />
                   <span className="truncate">Awards {save.unlockedCgIds.length}/6</span>
-                  {unclaimedAchievementCount > 0 && (
-                    <span
-                      data-testid="achievements-unclaimed-dot"
-                      className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-[#C98A2C] border-2 border-[#3A2B23] text-[#FFFDF7] text-[9.5px] font-extrabold font-mono-num flex items-center justify-center animate-pulse"
-                      aria-label={`${unclaimedAchievementCount} unclaimed achievement rewards`}
-                    >
-                      {unclaimedAchievementCount}
-                    </span>
-                  )}
                 </button>
               </div>
 
@@ -1029,7 +992,6 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
               ) : (
                 (hud.incomingWaveIndex > 0 || hud.activeWaveBannerIndex > 0) && (() => {
                   const isIncoming = hud.incomingWaveIndex > 0;
-                  const comp = isIncoming ? hud.incomingWaveComp : hud.activeWaveBannerComp;
                   return (
                     <div
                       data-testid="huge-wave-banner"
@@ -1055,86 +1017,12 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
                           </div>
                         </div>
                         <div
-                          className={`w-9 h-9 rounded-lg border-2 border-[#FFF1D6]/85 bg-[#C98A2C] text-[#1E1712] font-mono-num font-black text-base flex items-center justify-center shrink-0 ${
-                            isIncoming ? 'animate-pulse' : ''
-                          }`}
+                          className="w-9 h-9 rounded-lg border-2 border-[#FFF1D6]/85 bg-[#C98A2C] text-[#1E1712] font-mono-num font-black text-base flex items-center justify-center shrink-0"
                           aria-label="Wave countdown"
                         >
                           {isIncoming ? hud.incomingWaveCountdown : '!'}
                         </div>
                       </div>
-
-                      {/* T2 Enemy Troop Composition Scout Row */}
-                      <div
-                        data-testid="huge-wave-composition"
-                        className="px-3 py-1.5 bg-[#151B21]/90 border-t border-[#C98A2C]/45 flex items-center justify-between gap-2"
-                      >
-                        <span className="text-[9.5px] font-extrabold uppercase tracking-wider text-[#C6BBA8] shrink-0">
-                          Scouted
-                        </span>
-                        <div className="flex items-center gap-2 flex-wrap justify-end">
-                          {comp.heavy > 0 && (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#A4423C] border border-[#F5C16C]/90 text-[10.5px] font-extrabold font-mono-num text-[#FFF8E7] shadow-sm">
-                              <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true">
-                                <rect
-                                  x="2"
-                                  y="1.5"
-                                  width="8"
-                                  height="4"
-                                  rx="1"
-                                  fill="#F5C16C"
-                                  stroke="#2A1614"
-                                  strokeWidth="0.9"
-                                />
-                                <path
-                                  d="M6 5.5 V10.8"
-                                  stroke="#F5C16C"
-                                  strokeWidth="1.8"
-                                  strokeLinecap="round"
-                                />
-                              </svg>
-                              <span>Giant ×{comp.heavy}</span>
-                            </span>
-                          )}
-                          {comp.melee > 0 && (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#2B353F] border border-[#C98A2C]/55 text-[10.5px] font-extrabold font-mono-num text-[#F9F3E6]">
-                              <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true">
-                                <path
-                                  d="M2.5 9.5 L8.8 3.2 M7.2 2 L10 4.8 M2 10 L4 8"
-                                  stroke="#E9BA58"
-                                  strokeWidth="1.6"
-                                  strokeLinecap="round"
-                                />
-                              </svg>
-                              <span>Melee ×{comp.melee}</span>
-                            </span>
-                          )}
-                          {comp.ranged > 0 && (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#2B353F] border border-[#C98A2C]/55 text-[10.5px] font-extrabold font-mono-num text-[#F9F3E6]">
-                              <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true">
-                                <path
-                                  d="M3.5 2 C7.8 3.5 7.8 8.5 3.5 10 M3.5 2 L3.5 10 M4.5 6 L10.5 6"
-                                  fill="none"
-                                  stroke="#E9BA58"
-                                  strokeWidth="1.4"
-                                  strokeLinecap="round"
-                                />
-                              </svg>
-                              <span>Ranged ×{comp.ranged}</span>
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Shrinking amber-gold warhorn countdown strip */}
-                      {isIncoming && (
-                        <div className="h-1 w-full bg-[#11161B]">
-                          <div
-                            className="h-full bg-gradient-to-r from-[#7BA8B0] via-[#E9BA58] to-[#C98A2C] transition-[width] duration-100"
-                            style={{ width: `${hud.incomingWavePct}%` }}
-                          />
-                        </div>
-                      )}
                     </div>
                   );
                 })()
@@ -1437,10 +1325,8 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
                       </div>
                     </div>
                   </div>
-                  <span className="px-2 py-1 rounded-md border border-[#3A2B23] bg-[#C98A2C] text-[#FFFDF7] text-[10.5px] font-extrabold font-mono-num shrink-0">
-                    {save.claimedAchievementIds.includes(activeResultCg.id)
-                      ? 'Claimed'
-                      : `Claim +${activeResultCg.rewardCoins}`}
+                  <span className="px-2 py-1 rounded-md border border-[#3A2B23] bg-[#C98A2C] text-[#FFFDF7] text-[10.5px] font-extrabold shrink-0">
+                    View CG
                   </span>
                 </button>
               )}
@@ -1630,10 +1516,8 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
                       </div>
                     </div>
                   </div>
-                  <span className="px-2 py-1 rounded-md border border-[#3A2B23] bg-[#C98A2C] text-[#FFFDF7] text-[10.5px] font-extrabold font-mono-num shrink-0">
-                    {save.claimedAchievementIds.includes(activeResultCg.id)
-                      ? 'Claimed'
-                      : `Claim +${activeResultCg.rewardCoins}`}
+                  <span className="px-2 py-1 rounded-md border border-[#3A2B23] bg-[#C98A2C] text-[#FFFDF7] text-[10.5px] font-extrabold shrink-0">
+                    View CG
                   </span>
                 </button>
               )}
@@ -1844,7 +1728,6 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
             save={save}
             initialTab={cgGalleryTab}
             initialCgId={cgGalleryFocusId}
-            onClaimReward={handleClaimAchievementReward}
             onClose={() => setActiveSubModal('none')}
           />
         )}

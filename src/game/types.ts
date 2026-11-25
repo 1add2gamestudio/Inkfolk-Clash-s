@@ -96,6 +96,10 @@ export interface BattleUnit {
   auraDefense: number;
   armorReduction: number;
   knockbackImmune: boolean;
+  engaged?: boolean; // true only while actively stopped and fighting an ally in range
+  engageTimer?: number; // brief combat-readiness window triggered by taking damage or body-block (zero chasing)
+  aggroAlertTimer?: number; // brief 0.45s ink '!' indicator when struck/blocked into combat
+  lockedTargetId?: number | null; // ally target lock: finish killing current enemy before acquiring a new one
 }
 
 export interface SlamWave {
@@ -192,6 +196,7 @@ export interface BattleState {
   enemiesDefeated: number;
   allyBaseHp: number;
   allyBaseMaxHp: number;
+  allyBaseDamageTaken: number;
   enemyBaseHp: number;
   enemyBaseMaxHp: number;
   allyBaseHitFlash: number;

@@ -21,11 +21,9 @@ export interface BattleCgSpec {
 }
 
 export interface CgSelectionContext {
-  stageChapter: number;
-  allyAgeIndex: number;
-  unitsDeployed: number;
+  allyBaseHpRatio: number;
+  allyBaseDamageTaken?: number;
   enemyBaseHpRatio: number;
-  clearTime: number;
 }
 
 export const VICTORY_CGS: BattleCgSpec[] = [
@@ -34,9 +32,9 @@ export const VICTORY_CGS: BattleCgSpec[] = [
     outcome: 'victory',
     slotLabel: 'Victory CG I',
     achievementName: 'First Dawn',
-    rewardCoins: 25,
+    rewardCoins: 0,
     title: 'Banner at Sunrise',
-    triggerRule: 'Standard early-era victory (Chapters 1–3)',
+    triggerRule: 'Win a battle after losing more than 40% of your castle HP',
     caption: 'The Hearthclan gatehouse falls at first light as fresh bread passes along the wall.',
     directorNote:
       'Low-angle hero composition with a strong diagonal pennant cutting warm sunrise negative space; grounds victory in warmth and camaraderie rather than cold conquest.',
@@ -47,9 +45,9 @@ export const VICTORY_CGS: BattleCgSpec[] = [
     outcome: 'victory',
     slotLabel: 'Victory CG II',
     achievementName: 'Tide of Vanguard',
-    rewardCoins: 35,
+    rewardCoins: 0,
     title: 'Tide of the Inkfolk',
-    triggerRule: 'Win a battle after deploying 10+ Royal Elites',
+    triggerRule: 'Win a battle after taking 1%–40% damage to your castle',
     caption: 'United across the brook bridge, your Royal Vanguards shatter the enemy palisade.',
     directorNote:
       'Sweeping S-curve depth charge celebrating a decisive elite breakthrough; high-chroma teal silhouettes stay crisp even across dense crowd layering.',
@@ -60,9 +58,9 @@ export const VICTORY_CGS: BattleCgSpec[] = [
     outcome: 'victory',
     slotLabel: 'Victory CG III',
     achievementName: 'Sovereign of the Spire',
-    rewardCoins: 50,
+    rewardCoins: 0,
     title: 'Triumph of the Spire',
-    triggerRule: 'Win in Chapters 4–5 or after evolving to Age III+',
+    triggerRule: 'Win a battle with your castle at 100% HP (no damage taken)',
     caption: 'Lanterns drift above the Sun Spire while rival banners bow beneath the twilight sky.',
     directorNote:
       'Ceremonial scale contrast pairing towering brass colossus armor and golden observatory optics against cool cerulean twilight wash for an unforgettable campaign climax.',
@@ -76,9 +74,9 @@ export const DEFEAT_CGS: BattleCgSpec[] = [
     outcome: 'defeat',
     slotLabel: 'Defeat CG I',
     achievementName: 'Rain Before Dawn',
-    rewardCoins: 15,
+    rewardCoins: 0,
     title: 'The Long Road Back',
-    triggerRule: 'Early-stage defeat (Enemy base > 35% HP remaining)',
+    triggerRule: 'Fall in battle after dealing 1%–40% damage to the enemy tower',
     caption: 'Cold rain drowns the burning outpost behind them as battered remnants limp into the mist.',
     directorNote:
       'Somber watercolor retreat framing exhausted, mud-splattered Inkfolk soldiers supporting their wounded away from a smoking gatehouse under slate-gray rain.',
@@ -89,9 +87,9 @@ export const DEFEAT_CGS: BattleCgSpec[] = [
     outcome: 'defeat',
     slotLabel: 'Defeat CG II',
     achievementName: 'One Stone Short',
-    rewardCoins: 25,
+    rewardCoins: 0,
     title: 'One Stone Too Far',
-    triggerRule: 'Razor-close defeat (Enemy base <= 35% HP remaining)',
+    triggerRule: 'Fall in battle after dealing more than 40% damage to the enemy tower',
     caption: 'The enemy wall cracked beneath your vanguard assault—one more knight will break it open.',
     directorNote:
       'High-tension near-miss tableau framing a fractured fortress wall and lone golden arrow in ember light, directly motivating the "+12 Starting Food" comeback retry.',
@@ -102,9 +100,9 @@ export const DEFEAT_CGS: BattleCgSpec[] = [
     outcome: 'defeat',
     slotLabel: 'Defeat CG III',
     achievementName: 'Ashes of the Siege',
-    rewardCoins: 35,
+    rewardCoins: 0,
     title: 'Silence of the Fallen Bell',
-    triggerRule: 'Fall under prolonged or late-era siege (Ch.3+ or 35s+)',
+    triggerRule: 'Fall in battle while the enemy tower remains at 100% HP',
     caption: 'The siege bell lies cracked in the ash as giant shadows loom over the fallen vanguard.',
     directorNote:
       'Somber defeat composition pairing a slumped, exhausted Inkfolk soldier beside a cracked bronze bell against looming steam colossi in ash-choked twilight.',
@@ -119,22 +117,30 @@ export function selectBattleCg(
   ctx: CgSelectionContext
 ): BattleCgSpec {
   if (outcome === 'victory') {
-    if (ctx.stageChapter >= 4 || ctx.allyAgeIndex >= 2) {
-      return VICTORY_CGS[2];
+    const allyRatio = Math.max(0, Math.min(1, ctx.allyBaseHpRatio));
+    const tookDamage =
+      ctx.allyBaseDamageTaken !== undefined
+        ? ctx.allyBaseDamageTaken > 0
+        : allyRatio < 0.999999;
+    if (!tookDamage && allyRatio >= 0.999999) {
+      return VICTORY_CGS[2]; // Victory CG III: Flawless 100% HP victory
     }
-    if (ctx.unitsDeployed >= 10) {
-      return VICTORY_CGS[1];
+    const allyLoss = 1 - allyRatio;
+    if (allyLoss <= 0.400001) {
+      return VICTORY_CGS[1]; // Victory CG II: 1%-40% castle HP lost
     }
-    return VICTORY_CGS[0];
+    return VICTORY_CGS[0]; // Victory CG I: >40% castle HP lost
   }
 
-  if (ctx.enemyBaseHpRatio <= 0.35) {
-    return DEFEAT_CGS[1];
+  const enemyRatio = Math.max(0, Math.min(1, ctx.enemyBaseHpRatio));
+  const enemyLoss = 1 - enemyRatio;
+  if (enemyLoss <= 0.000001) {
+    return DEFEAT_CGS[2]; // Defeat CG III (most devastating): Enemy tower at 100% HP
   }
-  if (ctx.stageChapter >= 3 || ctx.clearTime >= 35) {
-    return DEFEAT_CGS[2];
+  if (enemyLoss <= 0.400001) {
+    return DEFEAT_CGS[0]; // Defeat CG I (moderate retreat): Enemy tower lost 1%-40% HP
   }
-  return DEFEAT_CGS[0];
+  return DEFEAT_CGS[1]; // Defeat CG II (narrowest defeat): Enemy tower lost >40% HP
 }
 
 export function getCgById(id: string): BattleCgSpec | undefined {
