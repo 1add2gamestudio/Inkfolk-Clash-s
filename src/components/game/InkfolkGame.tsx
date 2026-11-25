@@ -21,7 +21,6 @@ import {
 import { renderBattleCanvas } from '../../game/renderer';
 import { gameAudio } from '../../game/audio';
 import { useBattleCollisionAudio } from '../../game/useBattleCollisionAudio';
-import { useBattleLog } from '../../game/useBattleLog';
 import { selectBattleCg, type CgOutcome } from '../../game/cgCatalog';
 import {
   AD_OFFERS,
@@ -38,7 +37,6 @@ import {
   RationBreadIcon,
   UnitBadgeSvg,
 } from './GameIcons';
-import { BattleLogOverlay } from './BattleLogOverlay';
 import { CgGalleryModal } from './CgGalleryModal';
 import {
   ChaptersModal,
@@ -152,20 +150,6 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
   });
   const handleBattleCollisionRef = useRef(handleBattleCollision);
   handleBattleCollisionRef.current = handleBattleCollision;
-
-  const {
-    entries: battleLogEntries,
-    resetLog: resetBattleLog,
-    recordSoundEvent: recordBattleLogSound,
-    recordCollisionEvent: recordBattleLogCollision,
-    recordStepChecks: recordBattleLogStepChecks,
-  } = useBattleLog();
-  const recordBattleLogSoundRef = useRef(recordBattleLogSound);
-  recordBattleLogSoundRef.current = recordBattleLogSound;
-  const recordBattleLogCollisionRef = useRef(recordBattleLogCollision);
-  recordBattleLogCollisionRef.current = recordBattleLogCollision;
-  const recordBattleLogStepChecksRef = useRef(recordBattleLogStepChecks);
-  recordBattleLogStepChecksRef.current = recordBattleLogStepChecks;
 
   // Sync audio preferences & unlock audio cleanly on first user interaction
   useEffect(() => {
@@ -307,7 +291,6 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
       const nextBattle = createBattleState(stage, activeSave, extraFood, openingSurgeSeconds);
       battleRef.current = nextBattle;
       resetBattleCollisionAudio();
-      resetBattleLog('Battle Started', `${stage.id} · ${stage.title}`);
       setClaimedRunRewardAd(false);
       setClaimedSalvageAd(false);
       setNewlyUnlockedCgId(null);
@@ -322,7 +305,7 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
         document.activeElement.blur();
       }
     },
-    [resetBattleCollisionAudio, resetBattleLog, syncHudFromBattle]
+    [resetBattleCollisionAudio, syncHudFromBattle]
   );
 
   // Support ?autostart=1
@@ -440,14 +423,11 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
           rawDt,
           (ev) => {
             gameAudio.trigger(ev);
-            recordBattleLogSoundRef.current(ev, b);
           },
           (col) => {
             handleBattleCollisionRef.current(col);
-            recordBattleLogCollisionRef.current(col, b.time);
           }
         );
-        recordBattleLogStepChecksRef.current(b);
 
         if (b.phase === 'victory' && prevBattlePhase === 'playing') {
           persistBattleProgressToSave(b, true, true);
@@ -588,12 +568,7 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
   // Handlers inside Active Battle
   const handleSummon = (role: UnitRole) => {
     const b = battleRef.current;
-    if (
-      summonPlayerUnit(b, role, (ev) => {
-        gameAudio.trigger(ev);
-        recordBattleLogSound(ev, b);
-      })
-    ) {
+    if (summonPlayerUnit(b, role, (ev) => gameAudio.trigger(ev))) {
       syncHudFromBattle(b);
     }
   };
@@ -616,12 +591,7 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
 
   const handleBattleEvolveAge = () => {
     const b = battleRef.current;
-    if (
-      evolveAgeInBattle(b, (ev) => {
-        gameAudio.trigger(ev);
-        recordBattleLogSound(ev, b);
-      })
-    ) {
+    if (evolveAgeInBattle(b, (ev) => gameAudio.trigger(ev))) {
       persistBattleProgressToSave(b, false);
       syncHudFromBattle(b);
     }
@@ -1197,12 +1167,8 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
               )}
             </div>
 
-            {/* Bottom Area: Real-Time Battle Log (bottom-left) + Commander Dock */}
-            <div className="flex flex-col gap-2">
-              <BattleLogOverlay entries={battleLogEntries} />
-
-              {/* Bottom Commander Dock */}
-              <div className="pointer-events-auto space-y-2 pb-0.5">
+            {/* Bottom Commander Dock */}
+            <div className="pointer-events-auto space-y-2 pb-0.5">
               {/* In-Battle Upgrades & Age Evolution Row */}
               <div className="grid grid-cols-3 gap-1.5">
                 <button
@@ -1350,7 +1316,6 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
                     </button>
                   );
                 })}
-              </div>
               </div>
             </div>
           </div>
