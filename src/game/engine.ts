@@ -26,6 +26,9 @@ const GIANT_LANE_SLOTS = [-0.14, 0.34, -0.52] as const;
 const GIANT_RANGE_STAGGER = [0, 8, -6] as const;
 const GIANT_LANE_MIN = -0.58;
 const GIANT_LANE_MAX = 0.48;
+const GIANT_TARGET_LANE_INFANTRY = 0.52;
+const GIANT_TARGET_LANE_GIANT = 0.85;
+const GIANT_SLAM_LANE_RADIUS = 0.58;
 const MAX_ALLY_ELITES = 30;
 const MAX_UNITS_PER_SIDE = 95;
 const MAX_PARTICLES = 160;
@@ -560,7 +563,11 @@ export function stepBattle(
         for (const ally of state.units) {
           if (ally.faction !== 'ally' || ally.role !== 'heavy' || ally.state === 'die') continue;
           const dx = (ally.x - u.x) * dir;
-          if (dx >= -18 && dx <= u.range) {
+          if (
+            dx >= -18 &&
+            dx <= u.range &&
+            Math.abs(ally.laneOffset - u.laneOffset) <= GIANT_TARGET_LANE_GIANT
+          ) {
             triggerEnemyCombatStop(u);
             break;
           }
@@ -661,9 +668,10 @@ export function stepBattle(
       if (locked) {
         const lockedDx = (locked.x - u.x) * dir;
         const keepBuffer = u.role === 'heavy' ? 22 : 24;
-        if (lockedDx >= minDx && lockedDx <= u.range) {
+        const inHeavyLane = u.role !== 'heavy' || isInHeavyLaneReach(u, locked, 0.06);
+        if (lockedDx >= minDx && lockedDx <= u.range && inHeavyLane) {
           targetUnit = locked;
-        } else if (lockedDx < minDx - 8 || lockedDx > u.range + keepBuffer) {
+        } else if (lockedDx < minDx - 8 || lockedDx > u.range + keepBuffer || !inHeavyLane) {
           u.lockedTargetId = null;
         }
       } else {
@@ -683,6 +691,9 @@ export function stepBattle(
         if (dx >= minDx && dx <= u.range) {
           const laneDiff = Math.abs(other.laneOffset - u.laneOffset);
           if (u.faction === 'enemy' && u.role === 'melee' && laneDiff > 0.55) {
+            continue;
+          }
+          if (u.role === 'heavy' && !isInHeavyLaneReach(u, other)) {
             continue;
           }
           const score = dx + laneDiff * 2.5;
@@ -754,15 +765,13 @@ export function stepBattle(
           const LANE_TO_WORLD_X = 68;
           const sx = u.x;
           const sy = u.laneOffset;
+          const isAllyShot = u.faction === 'ally';
           const baseTx = targetUnit ? targetUnit.x : oppBaseEdge;
           const aimY = targetUnit ? targetUnit.laneOffset : 0;
-          const isPiercingAlly = u.faction === 'ally' && u.pierceCount > 1;
+          const isPiercingAlly = isAllyShot && u.pierceCount > 1;
           let tx = baseTx;
           let ty = aimY;
           if (isPiercingAlly && targetUnit) {
-            // Uniform 2D ray-box projection: extend straight past (baseTx, aimY) by up to +95 world units
-            // along the EXACT vector from shooter -> target so the arrow ALWAYS passes directly through
-            // targets straight below, straight above, diagonally close, or behind the archer!
             const vx = baseTx - sx;
             const vy = aimY - sy;
             const aimDist2D = Math.hypot(vx, vy * LANE_TO_WORLD_X);
@@ -792,13 +801,14 @@ export function stepBattle(
             targetX: tx,
             targetYOffset: ty,
             progress: 0,
-            duration: Math.max(0.16, travelDist2D / (isPiercingAlly ? 265 : 185)),
+            duration: Math.max(0.14, travelDist2D / (isAllyShot ? 245 : 185)),
             dmg: u.dmg,
-            arcHeight: isPiercingAlly
-              ? 3.0 + travelDist2D * 0.022
+            arcHeight: isAllyShot
+              ? 4.5 + travelDist2D * 0.035
               : 16 + travelDist2D * 0.13,
-            pierceRemaining: u.pierceCount,
+            pierceRemaining: Math.max(1, u.pierceCount),
             hitUnitIds: [],
+            aimedAtBase: !targetUnit,
           });
         } else if (targetUnit) {
           applyUnitHit(state, u, targetUnit, onSound, onCollision);
@@ -1038,7 +1048,7 @@ export function stepBattle(
             applyBaseHit(state, 'ally', p.dmg, false, onSound);
           }
         }
-      } else if (p.pierceRemaining > 0) {
+      } else if (p.aimedAtBase && p.pierceRemaining > 0 && p.hitUnitIds.length === 0) {
         const enemyBaseEdge = ENEMY_BASE_X - 18;
         if (Math.abs(p.targetX - enemyBaseEdge) < 52) {
           const baseDmg = state.finalChargeActive ? Math.round(p.dmg * 1.5) : p.dmg;
@@ -1174,6 +1184,17 @@ function isInMeleeLaneReach(attacker: BattleUnit, target: BattleUnit): boolean {
         ? 0.48
         : 0.34
       : 0.55;
+  return Math.abs(target.laneOffset - attacker.laneOffset) <= maxLaneDiff;
+}
+
+function isInHeavyLaneReach(
+  attacker: BattleUnit,
+  target: BattleUnit,
+  extraGrace = 0
+): boolean {
+  if (attacker.role !== 'heavy') return true;
+  const maxLaneDiff =
+    (target.role === 'heavy' ? GIANT_TARGET_LANE_GIANT : GIANT_TARGET_LANE_INFANTRY) + extraGrace;
   return Math.abs(target.laneOffset - attacker.laneOffset) <= maxLaneDiff;
 }
 
@@ -1613,9 +1634,10 @@ function applyUnitHit(
   let extraHits = 0;
   if (attacker.splashRadius > 0) {
     const maxExtra = Math.max(0, attacker.cleaveCount - 1);
-    // Melee knights cleave a realistic local 2D pocket around the blade (not across the entire road width);
-    // Colossal Giants keep full-width seismic ground slams.
+    // Both Melee knights and Colossal Giants cleave realistic 2D elliptical pockets around impact
+    // so flanking troops on the far road edge can genuinely bypass a lone Giant.
     const MELEE_CLEAVE_LANE_RADIUS = 0.42;
+    const baseLaneRadius = isGiant ? GIANT_SLAM_LANE_RADIUS : MELEE_CLEAVE_LANE_RADIUS;
 
     const cleaveTargets = state.units
       .filter((other) => {
@@ -1626,21 +1648,19 @@ function applyUnitHit(
         ) {
           return false;
         }
-        if (isGiant) {
-          return Math.abs(other.x - primaryTarget.x) <= attacker.splashRadius;
-        }
+        const laneRadius =
+          isGiant && other.role === 'heavy' ? baseLaneRadius + 0.22 : baseLaneRadius;
         const nx = (other.x - primaryTarget.x) / attacker.splashRadius;
-        const ny = (other.laneOffset - primaryTarget.laneOffset) / MELEE_CLEAVE_LANE_RADIUS;
+        const ny = (other.laneOffset - primaryTarget.laneOffset) / laneRadius;
         return nx * nx + ny * ny <= 1.0;
       })
       .sort((a, b) => {
-        if (isGiant) {
-          return Math.abs(a.x - primaryTarget.x) - Math.abs(b.x - primaryTarget.x);
-        }
+        const aLaneRad = isGiant && a.role === 'heavy' ? baseLaneRadius + 0.22 : baseLaneRadius;
+        const bLaneRad = isGiant && b.role === 'heavy' ? baseLaneRadius + 0.22 : baseLaneRadius;
         const ax = (a.x - primaryTarget.x) / attacker.splashRadius;
-        const ay = (a.laneOffset - primaryTarget.laneOffset) / MELEE_CLEAVE_LANE_RADIUS;
+        const ay = (a.laneOffset - primaryTarget.laneOffset) / aLaneRad;
         const bx = (b.x - primaryTarget.x) / attacker.splashRadius;
-        const by = (b.laneOffset - primaryTarget.laneOffset) / MELEE_CLEAVE_LANE_RADIUS;
+        const by = (b.laneOffset - primaryTarget.laneOffset) / bLaneRad;
         return ax * ax + ay * ay - (bx * bx + by * by);
       });
 

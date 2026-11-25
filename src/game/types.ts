@@ -133,6 +133,7 @@ export interface BattleProjectile {
   arcHeight: number;
   pierceRemaining: number;
   hitUnitIds: number[];
+  aimedAtBase?: boolean;
 }
 
 export interface BattleParticle {
