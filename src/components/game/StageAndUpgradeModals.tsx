@@ -40,12 +40,12 @@ export function ChaptersModal({
 
   return (
     <div
-      className="absolute inset-0 z-40 bg-[#231914]/65 flex items-center justify-center p-4"
+      className="absolute inset-0 z-40 bg-[#231914]/65 flex items-center justify-center safe-modal-overlay"
       role="dialog"
       aria-modal="true"
       aria-label="Select Chapter and Battle"
     >
-      <div className="w-full max-h-[90%] flex flex-col rounded-xl p-3.5" style={cardStyle}>
+      <div className="w-full max-h-full flex flex-col rounded-xl p-3.5" style={cardStyle}>
         <div className="flex items-center justify-between gap-2 pb-2 border-b border-[#3A2B23]/20">
           <div>
             <h2 className="font-display-serif text-lg font-extrabold leading-tight">
@@ -175,12 +175,12 @@ export function UpgradesModal({
 
   return (
     <div
-      className="absolute inset-0 z-40 bg-[#231914]/65 flex items-center justify-center p-4"
+      className="absolute inset-0 z-40 bg-[#231914]/65 flex items-center justify-center safe-modal-overlay"
       role="dialog"
       aria-modal="true"
       aria-label="Tribe Upgrades"
     >
-      <div className="w-full rounded-xl p-4 space-y-3" style={cardStyle}>
+      <div className="w-full max-h-full overflow-y-auto rounded-xl p-4 space-y-3" style={cardStyle}>
         <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-[#3A2B23]/20">
           <div>
             <h2 className="font-display-serif text-xl font-extrabold">Tribe Workshop</h2>
@@ -301,12 +301,12 @@ export function SettingsModal({
 
   return (
     <div
-      className="absolute inset-0 z-50 bg-[#231914]/70 flex items-center justify-center p-4"
+      className="absolute inset-0 z-50 bg-[#231914]/70 flex items-center justify-center safe-modal-overlay"
       role="dialog"
       aria-modal="true"
       aria-label="Game Settings"
     >
-      <div className="w-full rounded-xl p-4 space-y-3" style={cardStyle}>
+      <div className="w-full max-h-full overflow-y-auto rounded-xl p-4 space-y-3" style={cardStyle}>
         <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-[#3A2B23]/20">
           <h2 className="font-display-serif text-xl font-extrabold">Settings</h2>
           <button
@@ -437,13 +437,13 @@ export function NoAdsPassModal({
 }) {
   return (
     <div
-      className="absolute inset-0 z-50 bg-[#1B1410]/80 flex items-center justify-center p-4"
+      className="absolute inset-0 z-50 bg-[#1B1410]/80 flex items-center justify-center safe-modal-overlay"
       role="dialog"
       aria-modal="true"
       aria-label="No-Ads Pass"
       data-testid="no-ads-pass-modal"
     >
-      <div className="w-full rounded-xl p-4 space-y-3" style={cardStyle}>
+      <div className="w-full max-h-full overflow-y-auto rounded-xl p-4 space-y-3" style={cardStyle}>
         <div className="flex items-start justify-between gap-2 pb-2 border-b border-[#3A2B23]/20">
           <div className="flex items-center gap-2">
             <div className="w-9 h-9 rounded-lg border-2 border-[#3A2B23] bg-[#C98A2C] text-[#FFFDF7] flex items-center justify-center shrink-0">
@@ -546,13 +546,13 @@ export function SimulatedAdModal({
 
   return (
     <div
-      className="absolute inset-0 z-50 bg-[#1B1410]/85 flex items-center justify-center p-5"
+      className="absolute inset-0 z-50 bg-[#1B1410]/85 flex items-center justify-center safe-modal-overlay"
       role="dialog"
       aria-modal="true"
       aria-label="Ad SDK Placeholder"
       data-testid="simulated-ad-modal"
     >
-      <div className="w-full rounded-xl p-5 text-center space-y-3.5" style={cardStyle}>
+      <div className="w-full max-h-full overflow-y-auto rounded-xl p-5 text-center space-y-3.5" style={cardStyle}>
         <div className="text-[11px] font-bold uppercase tracking-wider text-[#7D6A5C]">
           {offer.kind === 'rewarded' ? 'Rewarded Video Slot' : 'Interstitial Ad Slot'}
         </div>

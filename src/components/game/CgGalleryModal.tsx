@@ -53,13 +53,13 @@ export function CgGalleryModal({
 
   return (
     <div
-      className="absolute inset-0 z-50 bg-[#231914]/78 flex items-center justify-center p-3.5"
+      className="absolute inset-0 z-50 bg-[#231914]/78 flex items-center justify-center safe-modal-overlay"
       role="dialog"
       aria-modal="true"
       aria-label="Chronicle Achievements"
       data-testid="achievements-modal"
     >
-      <div className="w-full max-h-[92%] flex flex-col rounded-xl p-3.5" style={cardStyle}>
+      <div className="w-full max-h-full flex flex-col rounded-xl p-3.5" style={cardStyle}>
         {/* Header */}
         <div className="flex items-start justify-between gap-2 pb-2 border-b border-[#3A2B23]/20">
           <div className="min-w-0">
@@ -237,12 +237,12 @@ export function CgGalleryModal({
       {/* Focused Theater Lightbox (strictly unlocked CGs only) */}
       {focusedCg && save.unlockedCgIds.includes(focusedCg.id) && (
         <div
-          className="absolute inset-0 z-50 bg-[#18110D]/92 flex flex-col justify-center p-4"
+          className="absolute inset-0 z-50 bg-[#18110D]/92 flex flex-col justify-center safe-modal-overlay"
           role="dialog"
           aria-modal="true"
           aria-label={focusedCg.title}
         >
-          <div className="w-full rounded-xl overflow-hidden border-2 border-[#F9F3E6]/35 bg-[#F9F3E6] text-[#3A2B23]">
+          <div className="w-full max-h-full overflow-y-auto rounded-xl border-2 border-[#F9F3E6]/35 bg-[#F9F3E6] text-[#3A2B23]">
             <div className="relative aspect-video bg-[#E6DAC2]">
               <img
                 src={focusedCg.imagePath}

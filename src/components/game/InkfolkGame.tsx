@@ -706,7 +706,7 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
   return (
     <div className="min-h-dvh w-full bg-[#1C1612] flex items-center justify-center sm:p-4">
       {/* Vertical Portrait Mobile Shell */}
-      <div className="relative w-full max-w-[430px] h-dvh sm:h-[780px] sm:max-h-[92dvh] sm:rounded-[32px] sm:border-[6px] sm:border-[#2E241E] bg-[#F3ECE0] shadow-[0_24px_64px_rgba(0,0,0,0.6)] overflow-hidden select-none">
+      <div className="relative w-full sm:max-w-[430px] h-dvh sm:h-[780px] sm:max-h-[92dvh] sm:rounded-[32px] sm:border-[6px] sm:border-[#2E241E] bg-[#F3ECE0] shadow-[0_24px_64px_rgba(0,0,0,0.6)] overflow-hidden select-none">
         {/* Live 60fps Watercolor Canvas */}
         <canvas
           ref={canvasRef}
@@ -718,7 +718,7 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
         {phase === 'title' && (
           <div
             data-testid="title-screen"
-            className="absolute inset-0 z-20 flex flex-col justify-between p-5 pt-7"
+            className="absolute inset-0 z-20 flex flex-col justify-between safe-screen-title"
             style={{
               background:
                 'linear-gradient(180deg, rgba(249,243,230,0.65) 0%, rgba(249,243,230,0.08) 45%, rgba(58,43,35,0.08) 70%, rgba(58,43,35,0.45) 100%)',
@@ -849,7 +849,7 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
         {(phase === 'playing' || phase === 'paused') && (
           <div
             data-testid="battle-hud"
-            className="pointer-events-none absolute inset-0 z-20 flex flex-col justify-between p-3 pt-4"
+            className="pointer-events-none absolute inset-0 z-20 flex flex-col justify-between safe-screen-hud"
           >
             {/* Top HUD Row */}
             <div className="space-y-2">
@@ -1242,12 +1242,12 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
         {/* PAUSE MODAL */}
         {phase === 'paused' && (
           <div
-            className="absolute inset-0 z-30 bg-[#231914]/60 flex items-center justify-center p-5"
+            className="absolute inset-0 z-30 bg-[#231914]/60 flex items-center justify-center safe-modal-overlay"
             role="dialog"
             aria-modal="true"
             aria-label="Game Paused"
           >
-            <div className="w-full rounded-xl p-5 space-y-3 text-center" style={panelFrame}>
+            <div className="w-full max-h-full overflow-y-auto rounded-xl p-5 space-y-3 text-center" style={panelFrame}>
               <h2 className="font-display-serif text-2xl font-extrabold">Battle Paused</h2>
               <p className="text-xs text-[#7D6A5C]">
                 {currentStage.id} · {currentStage.title} · {currentAge.name}
@@ -1296,12 +1296,12 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
         {/* VICTORY MODAL */}
         {phase === 'victory' && activeResultCg && (
           <div
-            className="absolute inset-0 z-30 bg-[#231914]/65 flex items-center justify-center p-4"
+            className="absolute inset-0 z-30 bg-[#231914]/65 flex items-center justify-center safe-modal-overlay"
             role="dialog"
             aria-modal="true"
             aria-label="Victory"
           >
-            <div className="w-full rounded-xl p-4 space-y-2.5 text-center" style={panelFrame}>
+            <div className="w-full max-h-full overflow-y-auto rounded-xl p-4 space-y-2.5 text-center" style={panelFrame}>
               <div>
                 <p className="text-[11px] font-extrabold uppercase tracking-wider text-[#2E6F7E]">
                   Stage Cleared · {currentStage.id}
@@ -1487,12 +1487,12 @@ export function InkfolkGame({ onOpenArtPitch }: InkfolkGameProps) {
         {/* DEFEAT MODAL */}
         {phase === 'defeat' && activeResultCg && (
           <div
-            className="absolute inset-0 z-30 bg-[#231914]/65 flex items-center justify-center p-4"
+            className="absolute inset-0 z-30 bg-[#231914]/65 flex items-center justify-center safe-modal-overlay"
             role="dialog"
             aria-modal="true"
             aria-label="Defeat"
           >
-            <div className="w-full rounded-xl p-4 space-y-2.5 text-center" style={panelFrame}>
+            <div className="w-full max-h-full overflow-y-auto rounded-xl p-4 space-y-2.5 text-center" style={panelFrame}>
               <div>
                 <p className="text-[11px] font-extrabold uppercase tracking-wider text-[#A4423C]">
                   Outpost Fallen · {currentStage.id}
